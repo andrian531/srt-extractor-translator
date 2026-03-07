@@ -288,8 +288,9 @@ set "M6=large-v2"       & set "S6=~3.0 GB" & set "V6=~10 GB"
 set "M7=large-v3"       & set "S7=~3.0 GB" & set "V7=~10 GB"
 set "M8=large-v3-turbo" & set "S8=~809 MB" & set "V8=~6 GB "
 
-:: Default choice = recommended model number
 set "MODEL_DL_DEFAULT=S"
+
+:MODEL_LOOP
 for %%i in (1 2 3 4 5 6 7 8) do (
     set "ST_%%i=            "
     if exist "%CACHE_DIR%\!M%%i!.pt"      set "ST_%%i=[installed]  "
@@ -300,7 +301,8 @@ for %%i in (1 2 3 4 5 6 7 8) do (
     if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "MODEL_DL_DEFAULT=%%i"
 )
 
-echo  Available models:
+echo.
+echo  Whisper models  ^(stored in: %CACHE_DIR%\^)
 echo  ------------------------------------------------------------------------
 echo   No  Model              Size      VRAM       Status
 echo  ------------------------------------------------------------------------
@@ -309,24 +311,23 @@ for %%i in (1 2 3 4 5 6 7 8) do (
 )
 echo  ------------------------------------------------------------------------
 echo   [A] Download ALL models  ^(~12 GB total^)
-echo   [S] Skip - models download automatically on first use
+echo   [S] Done - exit model download
 echo  ------------------------------------------------------------------------
 echo.
 echo  Tip: Disable Cloudflare/firewall if download is slow or fails.
 echo.
-set /p MODEL_DL="Choose model to download [1-8 / A / S, default=!MODEL_DL_DEFAULT!]: "
+set /p MODEL_DL="Choose model [1-8 / A / S, default=!MODEL_DL_DEFAULT!]: "
 if "!MODEL_DL!"=="" set "MODEL_DL=!MODEL_DL_DEFAULT!"
 
-if /i "!MODEL_DL!"=="S" goto MODEL_SKIP
+if /i "!MODEL_DL!"=="S" goto MODEL_DONE
 if /i "!MODEL_DL!"=="A" goto MODEL_DOWNLOAD_ALL
-
-:: Download single model
 set /a DL_IDX=!MODEL_DL! 2>nul
-if !DL_IDX! LSS 1 goto MODEL_SKIP
-if !DL_IDX! GTR 8 goto MODEL_SKIP
+if !DL_IDX! LSS 1 goto MODEL_LOOP
+if !DL_IDX! GTR 8 goto MODEL_LOOP
 
+echo.
 call :DOWNLOAD_MODEL !M%MODEL_DL%!
-goto MODEL_DONE
+goto MODEL_LOOP
 
 :MODEL_DOWNLOAD_ALL
 echo.
@@ -335,10 +336,7 @@ echo.
 for %%i in (1 2 3 4 5 6 7 8) do (
     call :DOWNLOAD_MODEL !M%%i!
 )
-goto MODEL_DONE
-
-:MODEL_SKIP
-echo  [SKIP] Models will be downloaded automatically on first use.
+goto MODEL_LOOP
 
 :MODEL_DONE
 
@@ -355,13 +353,16 @@ echo  Models stored in: !WX_CACHE!\
 echo.
 
 set "WX_DEFAULT=S"
+
+:WX_MODEL_LOOP
 for %%i in (1 2 3 4 5 6 7 8) do (
     set "WX_ST_%%i=            "
     if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "WX_ST_%%i=[installed]  "
     if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "WX_DEFAULT=%%i"
 )
 
-echo  Available models:
+echo.
+echo  WhisperX models  ^(stored in: !WX_CACHE!\^)
 echo  ------------------------------------------------------------------------
 echo   No  Model              Size      VRAM       Status
 echo  ------------------------------------------------------------------------
@@ -370,7 +371,7 @@ for %%i in (1 2 3 4 5 6 7 8) do (
 )
 echo  ------------------------------------------------------------------------
 echo   [A] Download ALL WhisperX models
-echo   [S] Skip
+echo   [S] Done - exit model download
 echo  ------------------------------------------------------------------------
 echo.
 set /p WX_DL="Choose model [1-8 / A / S, default=!WX_DEFAULT!]: "
@@ -378,16 +379,18 @@ if "!WX_DL!"=="" set "WX_DL=!WX_DEFAULT!"
 if /i "!WX_DL!"=="S" goto WX_MODEL_SKIP
 if /i "!WX_DL!"=="A" goto WX_DL_ALL
 set /a WX_IDX=!WX_DL! 2>nul
-if !WX_IDX! LSS 1 goto WX_MODEL_SKIP
-if !WX_IDX! GTR 8 goto WX_MODEL_SKIP
+if !WX_IDX! LSS 1 goto WX_MODEL_LOOP
+if !WX_IDX! GTR 8 goto WX_MODEL_LOOP
+echo.
 call :DOWNLOAD_WX_MODEL !M%WX_DL%!
-goto WX_MODEL_SKIP
+goto WX_MODEL_LOOP
 
 :WX_DL_ALL
 echo.
 for %%i in (1 2 3 4 5 6 7 8) do (
     call :DOWNLOAD_WX_MODEL !M%%i!
 )
+goto WX_MODEL_LOOP
 
 :WX_MODEL_SKIP
 
