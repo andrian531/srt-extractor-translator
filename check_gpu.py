@@ -101,7 +101,23 @@ if __name__ == "__main__":
         if ok:
             try:
                 import torch
+                vram_gb = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
                 print(f"GPU_NAME={torch.cuda.get_device_name(0)}")
-                print(f"VRAM={round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)}GB")
+                print(f"VRAM={vram_gb}GB")
+                if vram_gb >= 10:
+                    print("RECOMMENDED_MODEL=large-v3")
+                    print("RECOMMENDED_REASON=10GB+ VRAM: full large-v3 fits comfortably")
+                elif vram_gb >= 6:
+                    print("RECOMMENDED_MODEL=large-v3-turbo")
+                    print("RECOMMENDED_REASON=6-10GB VRAM: best balance of speed and accuracy")
+                elif vram_gb >= 4:
+                    print("RECOMMENDED_MODEL=medium")
+                    print("RECOMMENDED_REASON=4-6GB VRAM: medium is the safe choice")
+                else:
+                    print("RECOMMENDED_MODEL=small")
+                    print("RECOMMENDED_REASON=<4GB VRAM: small recommended to avoid OOM")
             except Exception:
                 pass
+        else:
+            print("RECOMMENDED_MODEL=medium")
+            print("RECOMMENDED_REASON=no GPU: medium runs well on CPU")

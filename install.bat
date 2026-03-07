@@ -215,41 +215,52 @@ echo.
 
 set "CACHE_DIR=%USERPROFILE%\.cache\whisper"
 
-:: Check which models are already installed
+:: Get recommendation from GPU info (RECOMMENDED_MODEL already set by Step 3b verify)
+if "!RECOMMENDED_MODEL!"=="" set "RECOMMENDED_MODEL=medium"
+if "!RECOMMENDED_REASON!"=="" set "RECOMMENDED_REASON=default"
+
+echo  GPU recommendation: !RECOMMENDED_MODEL! ^(!RECOMMENDED_REASON!^)
+echo.
+
+set "M1=tiny"           & set "S1=~75 MB " & set "V1=~1 GB "
+set "M2=base"           & set "S2=~145 MB" & set "V2=~1 GB "
+set "M3=small"          & set "S3=~466 MB" & set "V3=~2 GB "
+set "M4=medium"         & set "S4=~1.5 GB" & set "V4=~5 GB "
+set "M5=large-v1"       & set "S5=~3.0 GB" & set "V5=~10 GB"
+set "M6=large-v2"       & set "S6=~3.0 GB" & set "V6=~10 GB"
+set "M7=large-v3"       & set "S7=~3.0 GB" & set "V7=~10 GB"
+set "M8=large-v3-turbo" & set "S8=~809 MB" & set "V8=~6 GB "
+
+:: Default choice = recommended model number
+set "MODEL_DL_DEFAULT=S"
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "ST_%%i=            "
+    if exist "%CACHE_DIR%\!M%%i!.pt"      set "ST_%%i=[installed]  "
+    if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "ST_%%i=[RECOMMENDED]"
+    if exist "%CACHE_DIR%\!M%%i!.pt" (
+        if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "ST_%%i=[installed] * "
+    )
+    if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "MODEL_DL_DEFAULT=%%i"
+)
+
 echo  Available models:
-echo  -----------------------------------------------------------------------
-echo   No  Model             Size      VRAM needed   Status
-echo  -----------------------------------------------------------------------
-
-set "M1=tiny"       & set "S1=~75 MB  " & set "V1=~1 GB "
-set "M2=base"       & set "S2=~145 MB " & set "V2=~1 GB "
-set "M3=small"      & set "S3=~466 MB " & set "V3=~2 GB "
-set "M4=medium"     & set "S4=~1.5 GB " & set "V4=~5 GB "
-set "M5=large-v1"   & set "S5=~3.0 GB " & set "V5=~10 GB"
-set "M6=large-v2"   & set "S6=~3.0 GB " & set "V6=~10 GB"
-set "M7=large-v3"   & set "S7=~3.0 GB " & set "V7=~10 GB"
-set "M8=large-v3-turbo" & set "S8=~809 MB " & set "V8=~6 GB "
-
+echo  ------------------------------------------------------------------------
+echo   No  Model              Size      VRAM       Status
+echo  ------------------------------------------------------------------------
 for %%i in (1 2 3 4 5 6 7 8) do (
-    set "ST_%%i=not installed"
-    if exist "%CACHE_DIR%\!M%%i!.pt" set "ST_%%i=installed    "
+    echo   [%%i] !M%%i!          !S%%i!    !V%%i!     !ST_%%i!
 )
-
-for %%i in (1 2 3 4 5 6 7 8) do (
-    echo   [%%i] !M%%i!          !S%%i!    !V%%i!      !ST_%%i!
-)
-
-echo  -----------------------------------------------------------------------
+echo  ------------------------------------------------------------------------
 echo   [A] Download ALL models  ^(~12 GB total^)
-echo   [S] Skip - download later automatically on first use
-echo  -----------------------------------------------------------------------
+echo   [S] Skip - models download automatically on first use
+echo  ------------------------------------------------------------------------
 echo.
 echo  Tip: Disable Cloudflare/firewall if download is slow or fails.
 echo.
-set /p MODEL_DL="Choose model to download [1-8 / A / S, default=S]: "
+set /p MODEL_DL="Choose model to download [1-8 / A / S, default=!MODEL_DL_DEFAULT!]: "
+if "!MODEL_DL!"=="" set "MODEL_DL=!MODEL_DL_DEFAULT!"
 
 if /i "!MODEL_DL!"=="S" goto MODEL_SKIP
-if "!MODEL_DL!"==""     goto MODEL_SKIP
 if /i "!MODEL_DL!"=="A" goto MODEL_DOWNLOAD_ALL
 
 :: Download single model

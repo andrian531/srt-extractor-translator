@@ -57,4 +57,7 @@ env/
 # OS files
 .DS_Store
 Thumbs.db
+
+#processed result file
 .installed
+*.srt
