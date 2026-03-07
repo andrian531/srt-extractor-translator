@@ -2,6 +2,7 @@ import sys
 import os
 import re
 import subprocess
+import time
 
 
 def detect_claude_cmd():
@@ -276,6 +277,8 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
     print(f"  Translating in batches...")
 
     MAX_TOKENS_PER_BATCH = 300
+    GEMINI_BATCH_DELAY   = 3    # seconds between batches (Gemini only)
+    MAX_RETRY            = 2    # retry attempts on failure or timeout
 
     def est_tok(text):
         return max(1, len(text) // 4)
@@ -326,6 +329,9 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
                 print(f"  Batch {batch_num}/{total_batch} - cache invalid, reprocessing")
                 os.remove(tmp_file)
 
+        if engine_type == "gemini" and batch_num > 1:
+            time.sleep(GEMINI_BATCH_DELAY)
+
         print(f"  Batch {batch_num}/{total_batch} ({len(batch)} segments, ~{batch_tokens} tokens)...", end="", flush=True)
 
         lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in batch]
@@ -354,7 +360,16 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
         )
 
         try:
-            rc, stdout, stderr = run_translate_prompt(claude_cmd, engine_type, prompt)
+            rc, stdout, stderr = -1, "", ""
+            for attempt in range(1, MAX_RETRY + 2):
+                rc, stdout, stderr = run_translate_prompt(claude_cmd, engine_type, prompt)
+                if rc == 0 and stdout.strip():
+                    break
+                if attempt <= MAX_RETRY:
+                    wait = attempt * 5
+                    tag = "TIMEOUT" if stderr == "TIMEOUT" else f"rc={rc}"
+                    print(f" {tag}, retry {attempt}/{MAX_RETRY} in {wait}s...", end="", flush=True)
+                    time.sleep(wait)
 
             if rc != 0 or not stdout.strip():
                 print(f" FAILED (rc={rc})")
@@ -389,10 +404,6 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
             for idx, ts, text in batch:
                 translated_blocks.append((idx, ts, translated_lines.get(idx, text)))
 
-        except subprocess.TimeoutExpired:
-            print(f" TIMEOUT")
-            for idx, ts, text in batch:
-                translated_blocks.append((idx, ts, text))
         except FileNotFoundError as e:
             print(f" ERROR")
             print(f"  [ERROR] Cannot run {engine_label}: {e}")
@@ -412,10 +423,12 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
         if orig[2] != trans[2]
     )
 
-    if translated_count > 0:
+    if translated_count == total:
         import shutil as _shutil
         _shutil.rmtree(tmp_dir, ignore_errors=True)
         print(f"  [OK] Temp folder removed")
+    elif translated_count > 0:
+        print(f"  [!] Partial translation — temp folder kept for resume: {tmp_dir}")
     else:
         print(f"  [!] Temp folder kept for debugging: {tmp_dir}")
         print(f"      Check *_raw.txt files to see engine output")
