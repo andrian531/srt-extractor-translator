@@ -169,6 +169,63 @@ if "%CUDA_OK%"=="true" (
 :PYTORCH_DONE
 
 :: ============================================================
+:: STEP 3c: WhisperX (optional - faster + multi-speaker)
+:: ============================================================
+echo.
+echo [3c/4] Checking WhisperX ^(optional^)...
+
+where whisperx >nul 2>&1
+if not errorlevel 1 (
+    echo  [OK] WhisperX already installed
+    goto WHISPERX_DONE
+)
+
+echo  WhisperX is not installed.
+echo  Benefits: faster processing, multi-speaker labels ^(who said what^).
+echo.
+set /p INSTALL_WX="  Install WhisperX? (Y/N, default=N): "
+if /i not "!INSTALL_WX!"=="Y" goto WHISPERX_DONE
+
+echo.
+echo  Installing WhisperX ^(this may take several minutes^)...
+echo  Progress is shown below:
+echo.
+pip install whisperx
+if errorlevel 1 (
+    echo  [!] WhisperX installation failed. Skipping.
+    goto WHISPERX_DONE
+)
+where whisperx >nul 2>&1
+if errorlevel 1 (
+    echo  [!] WhisperX not found in PATH after install. Skipping.
+    goto WHISPERX_DONE
+)
+echo  [OK] WhisperX installed
+echo.
+echo  Speaker diarization requires a free HuggingFace token.
+set /p SETUP_HF="  Set up HuggingFace token now? (Y/N, default=N): "
+if /i not "!SETUP_HF!"=="Y" goto WHISPERX_DONE
+
+start "" "https://huggingface.co/settings/tokens"
+timeout /t 2 >nul
+start "" "https://huggingface.co/pyannote/speaker-diarization-3.1"
+timeout /t 1 >nul
+start "" "https://huggingface.co/pyannote/segmentation-3.0"
+echo.
+echo  3 pages opened in your browser:
+echo   1. huggingface.co/settings/tokens  - create and copy a token
+echo   2. speaker-diarization-3.1         - click Accept license
+echo   3. segmentation-3.0               - click Accept license
+echo.
+set /p HF_INPUT="  Paste your token here (Enter to skip): "
+if "!HF_INPUT!"=="" goto WHISPERX_DONE
+(echo !HF_INPUT!)>"%SCRIPT_DIR%\.hf_token"
+setx HF_TOKEN "!HF_INPUT!" >nul 2>&1
+echo  [OK] Token saved to .hf_token
+
+:WHISPERX_DONE
+
+:: ============================================================
 :: STEP 4: AI Translation Engines (Claude / Gemini)
 :: ============================================================
 echo.
@@ -286,6 +343,55 @@ echo  [SKIP] Models will be downloaded automatically on first use.
 :MODEL_DONE
 
 :: ============================================================
+:: STEP 5b: WhisperX Model Download (only if installed)
+:: ============================================================
+where whisperx >nul 2>&1
+if errorlevel 1 goto WX_MODEL_SKIP
+
+set "WX_CACHE=%USERPROFILE%\.cache\huggingface\hub"
+echo.
+echo [5b/5] WhisperX Model Download ^(optional^)
+echo  Models stored in: !WX_CACHE!\
+echo.
+
+set "WX_DEFAULT=S"
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "WX_ST_%%i=            "
+    if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "WX_ST_%%i=[installed]  "
+    if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "WX_DEFAULT=%%i"
+)
+
+echo  Available models:
+echo  ------------------------------------------------------------------------
+echo   No  Model              Size      VRAM       Status
+echo  ------------------------------------------------------------------------
+for %%i in (1 2 3 4 5 6 7 8) do (
+    echo   [%%i] !M%%i!          !S%%i!    !V%%i!     !WX_ST_%%i!
+)
+echo  ------------------------------------------------------------------------
+echo   [A] Download ALL WhisperX models
+echo   [S] Skip
+echo  ------------------------------------------------------------------------
+echo.
+set /p WX_DL="Choose model [1-8 / A / S, default=!WX_DEFAULT!]: "
+if "!WX_DL!"=="" set "WX_DL=!WX_DEFAULT!"
+if /i "!WX_DL!"=="S" goto WX_MODEL_SKIP
+if /i "!WX_DL!"=="A" goto WX_DL_ALL
+set /a WX_IDX=!WX_DL! 2>nul
+if !WX_IDX! LSS 1 goto WX_MODEL_SKIP
+if !WX_IDX! GTR 8 goto WX_MODEL_SKIP
+call :DOWNLOAD_WX_MODEL !M%WX_DL%!
+goto WX_MODEL_SKIP
+
+:WX_DL_ALL
+echo.
+for %%i in (1 2 3 4 5 6 7 8) do (
+    call :DOWNLOAD_WX_MODEL !M%%i!
+)
+
+:WX_MODEL_SKIP
+
+:: ============================================================
 :: Write marker file
 :: ============================================================
 echo installed > "%SCRIPT_DIR%\.installed"
@@ -312,6 +418,23 @@ if errorlevel 1 (
     echo  [ERROR] Failed to download %DL_MODEL%
 ) else (
     echo  [OK] %DL_MODEL% downloaded
+)
+goto :eof
+
+::------------------------------------------------------------
+:DOWNLOAD_WX_MODEL
+set "DL_WX=%~1"
+set "WX_HUB=%USERPROFILE%\.cache\huggingface\hub"
+if exist "!WX_HUB!\models--Systran--faster-whisper-%DL_WX%\" (
+    echo  [SKIP] WhisperX %DL_WX% already downloaded
+    goto :eof
+)
+echo  Downloading WhisperX %DL_WX%...
+python -c "from faster_whisper import WhisperModel; WhisperModel('%DL_WX%', device='cpu')"
+if errorlevel 1 (
+    echo  [ERROR] Failed to download WhisperX %DL_WX%
+) else (
+    echo  [OK] WhisperX %DL_WX% downloaded
 )
 goto :eof
 
