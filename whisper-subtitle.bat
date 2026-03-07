@@ -13,6 +13,7 @@ set "MODEL=medium"
 set "LANGUAGE="
 set "OUTPUT_FORMAT=srt"
 set "WHISPER_DEVICE=cuda"
+set "AUTO_TRANSLATE=false"
 
 :: ============================================================
 :: QUICK DEPENDENCY CHECK
@@ -108,12 +109,14 @@ if "!CUDA_OK!"=="true" (
 )
 echo ============================================================
 echo.
-echo   [1] Generate Subtitle  - extract subtitles from video files
-echo   [2] Translate Subtitle - translate .srt files to another language
+echo   [1] Generate Subtitle    - extract subtitles from video files
+echo   [2] Translate Subtitle   - translate .srt files to another language
+echo   [3] Generate + Translate - extract then auto-translate (set ^& forget)
 echo.
-set /p MAIN_MENU="Choose [1-2]: "
+set /p MAIN_MENU="Choose [1-3]: "
 
 if "!MAIN_MENU!"=="2" goto MENU_TRANSLATE
+if "!MAIN_MENU!"=="3" goto MENU_GENERATE_TRANSLATE
 goto MENU_GENERATE
 
 :: ============================================================
@@ -209,6 +212,199 @@ pause
 exit /b 0
 
 :: ============================================================
+:: MENU: GENERATE + TRANSLATE (set & forget)
+:: ============================================================
+:MENU_GENERATE_TRANSLATE
+cls
+echo ============================================================
+echo   GENERATE + TRANSLATE
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+if "!CLAUDE_CMD!"=="" if "!GEMINI_CMD!"=="" (
+    echo  [WARN] No translation engine found. Translation step will be skipped.
+    echo  Install Claude : npm install -g @anthropic-ai/claude-code
+    echo  Install Gemini : npm install -g @google/gemini-cli
+    echo.
+)
+
+:: Scan video files
+echo  Scanning for video files in: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+set "IDX=0"
+for /r "%SCRIPT_DIR%" %%f in (
+    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
+) do (
+    set /a IDX+=1
+    set "FILE_!IDX!=%%f"
+    set "REL=%%f"
+    set "REL=!REL:%SCRIPT_DIR%\=!"
+    echo  [!IDX!] !REL!
+)
+
+if !IDX!==0 (
+    echo  No video files found in this folder.
+    pause
+    exit /b 0
+)
+
+echo.
+echo  Found: !IDX! video file(s)
+echo.
+
+:GT_CHOOSE_FILE
+set "CHOICE="
+set /p CHOICE="Enter file number (1-!IDX!) or 'all': "
+
+if /i "!CHOICE!"=="all" goto GT_CHOOSE_OPTIONS
+if "!CHOICE!"=="" goto GT_CHOOSE_FILE
+set /a TEST_CHOICE=!CHOICE! 2>nul
+if !TEST_CHOICE! LSS 1 goto GT_INVALID_CHOICE
+if !TEST_CHOICE! GTR !IDX! goto GT_INVALID_CHOICE
+goto GT_CHOOSE_OPTIONS
+
+:GT_INVALID_CHOICE
+echo  [!] Invalid input
+goto GT_CHOOSE_FILE
+
+:GT_CHOOSE_OPTIONS
+:: Get video duration for single file selection
+set "VID_MIN=0"
+set "VID_HHMM=unknown"
+if /i not "!CHOICE!"=="all" (
+    set "VIDEO_FILE=!FILE_%CHOICE%!"
+    call :GET_VIDEO_DURATION
+)
+echo.
+echo ============================================================
+echo   TRANSCRIPTION OPTIONS
+echo ============================================================
+if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
+    echo  Duration : !VID_HHMM!
+    if "!CUDA_OK!"=="false" (
+        if !VID_MIN! GTR 60 echo  [TIP] Long video on CPU -- 'small' for speed, 'medium' for quality
+    ) else (
+        if !VID_MIN! GTR 90 echo  [TIP] Long video -- 'large-v3-turbo' for speed, 'large-v3' for max accuracy
+    )
+    echo ============================================================
+)
+echo.
+echo   [1] tiny           - fastest, lower accuracy         ^| ~1GB  VRAM
+echo   [2] base           - fast, decent accuracy           ^| ~1GB  VRAM
+echo   [3] small          - balanced                        ^| ~2GB  VRAM
+echo   [4] medium         - good accuracy        [DEFAULT]  ^| ~5GB  VRAM
+echo   [5] large-v1       - high accuracy                   ^| ~10GB VRAM
+echo   [6] large-v2       - better than v1                  ^| ~10GB VRAM
+echo   [7] large-v3       - best official accuracy          ^| ~10GB VRAM
+echo   [8] large-v3-turbo - fast, near v3 quality           ^| ~6GB  VRAM
+echo.
+set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
+
+if "!MODEL_CHOICE!"=="1" set MODEL=tiny
+if "!MODEL_CHOICE!"=="2" set MODEL=base
+if "!MODEL_CHOICE!"=="3" set MODEL=small
+if "!MODEL_CHOICE!"=="4" set MODEL=medium
+if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
+if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
+if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
+if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
+if "!MODEL_CHOICE!"==""  set MODEL=medium
+
+echo.
+echo  Source language of the video:
+echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
+echo   [2] Japanese
+echo   [3] Korean
+echo   [4] Chinese (Mandarin)
+echo   [5] Cantonese
+echo   [6] Indonesian
+echo   [7] English
+echo   [8] Other (type manually)
+echo.
+set /p LANG_CHOICE="Choose language [1-8, default=1]: "
+
+if "!LANG_CHOICE!"=="1" set LANGUAGE=
+if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
+if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
+if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
+if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
+if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
+if "!LANG_CHOICE!"=="7" set LANGUAGE=English
+if "!LANG_CHOICE!"=="8" (
+    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
+)
+if "!LANG_CHOICE!"==""  set LANGUAGE=
+
+echo.
+echo  Output format:
+echo   [1] srt  - most compatible   [DEFAULT]
+echo   [2] vtt  - for web
+echo   [3] txt  - plain text without timestamps
+echo   [4] all  - generate all formats
+echo.
+set /p FMT_CHOICE="Choose format [1-4, default=1]: "
+
+if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
+if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
+if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
+if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
+if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
+
+:: Set SRT_LANG from source language for smart target exclusion
+set "SRT_LANG=unknown"
+if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
+if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
+if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
+if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
+
+:: Ask target language upfront
+call :CHOOSE_TARGET_LANG
+
+:: Summary
+echo.
+echo ============================================================
+echo   SUMMARY:
+if /i "!CHOICE!"=="all" (
+    echo   Files   : ALL !IDX! files
+) else (
+    echo   File    : !FILE_%CHOICE%!
+)
+echo   Model   : !MODEL!
+if "!LANGUAGE!"=="" (
+    echo   Language: Auto-detect
+) else (
+    echo   Language: !LANGUAGE!
+)
+echo   Device  : !WHISPER_DEVICE!
+echo   Output  : .!OUTPUT_FORMAT!
+echo   Translate to: !TARGET_LANG!
+echo ============================================================
+echo.
+set /p CONFIRM="Continue? (Y/N): "
+if /i not "!CONFIRM!"=="Y" goto GT_CHOOSE_FILE
+
+set "AUTO_TRANSLATE=true"
+
+if /i "!CHOICE!"=="all" goto GT_PROCESS_ALL
+
+set "TARGET_FILE=!FILE_%CHOICE%!"
+call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GT_PROCESS_ALL
+for /l %%i in (1,1,!IDX!) do (
+    echo.
+    echo  [%%i/!IDX!] Processing: !FILE_%%i!
+    call :RUN_WHISPER "!FILE_%%i!"
+)
+goto DONE
+
+:: ============================================================
 :: MENU: GENERATE SUBTITLE
 :: ============================================================
 :MENU_GENERATE
@@ -261,12 +457,27 @@ echo  [!] Invalid input
 goto CHOOSE_FILE
 
 :CHOOSE_OPTIONS
+:: Get video duration for single file selection
+set "VID_MIN=0"
+set "VID_HHMM=unknown"
+if /i not "!CHOICE!"=="all" (
+    set "VIDEO_FILE=!FILE_%CHOICE%!"
+    call :GET_VIDEO_DURATION
+)
 echo.
 echo ============================================================
 echo   TRANSCRIPTION OPTIONS
 echo ============================================================
+if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
+    echo  Duration : !VID_HHMM!
+    if "!CUDA_OK!"=="false" (
+        if !VID_MIN! GTR 60 echo  [TIP] Long video on CPU -- 'small' for speed, 'medium' for quality
+    ) else (
+        if !VID_MIN! GTR 90 echo  [TIP] Long video -- 'large-v3-turbo' for speed, 'large-v3' for max accuracy
+    )
+    echo ============================================================
+)
 echo.
-echo  Whisper Model: (all models use GPU if available)
 echo   [1] tiny           - fastest, lower accuracy         ^| ~1GB  VRAM
 echo   [2] base           - fast, decent accuracy           ^| ~1GB  VRAM
 echo   [3] small          - balanced                        ^| ~2GB  VRAM
@@ -407,25 +618,35 @@ set "SRT_FILE=%FILE_DIR%\%~n1.srt"
 if exist "!SRT_FILE!" (
     echo.
     echo  --------------------------------------------------------
-    set /p TRANSLATE_NOW="  Translate subtitle? (Y/N, default=N): "
-    if /i "!TRANSLATE_NOW!"=="Y" (
-        :: Determine source language from user's language selection
-        set "SRT_LANG=unknown"
-        if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
-        if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
-        if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
-        if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
-        if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
-        if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
-        :: Auto-detect: read from generated SRT
+    if "!AUTO_TRANSLATE!"=="true" (
+        echo  Auto-translating to !TARGET_LANG!...
+        :: If source was auto-detect, detect now from the generated SRT
         if "!SRT_LANG!"=="unknown" (
             set "DETECT_FILE=!SRT_FILE!"
             call :DETECT_SRT_LANG
         )
-        call :CHOOSE_TARGET_LANG
         call :RUN_TRANSLATE "!SRT_FILE!"
     ) else (
-        echo  [INFO] Skipped. Use menu [2] to translate later.
+        set /p TRANSLATE_NOW="  Translate subtitle? (Y/N, default=N): "
+        if /i "!TRANSLATE_NOW!"=="Y" (
+            :: Determine source language from user's language selection
+            set "SRT_LANG=unknown"
+            if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
+            if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
+            if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
+            if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
+            if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
+            if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
+            :: Auto-detect: read from generated SRT
+            if "!SRT_LANG!"=="unknown" (
+                set "DETECT_FILE=!SRT_FILE!"
+                call :DETECT_SRT_LANG
+            )
+            call :CHOOSE_TARGET_LANG
+            call :RUN_TRANSLATE "!SRT_FILE!"
+        ) else (
+            echo  [INFO] Skipped. Use menu [2] to translate later.
+        )
     )
 )
 goto :eof
@@ -572,6 +793,24 @@ if "!TRANS_SUCCESS!"=="false" (
         python "%~dp0translate_srt.py" "!TRANS_FILE!" "!CLAUDE_CMD!" "claude" "!TARGET_LANG!"
     )
 )
+goto :eof
+
+:: ============================================================
+:: SUBROUTINE: Get video duration via ffprobe
+:: Input : VIDEO_FILE (path to video)
+:: Output: VID_MIN (total minutes), VID_HHMM (display string)
+:: ============================================================
+:GET_VIDEO_DURATION
+set "VID_MIN=0"
+set "VID_HHMM=unknown"
+set "FFPROBE_DUR="
+:: Use temp file to avoid quoting issues with paths containing spaces
+ffprobe -v quiet -show_entries format=duration -of csv=p=0 "!VIDEO_FILE!" > "%TEMP%\ffprobe_dur.tmp" 2>nul
+for /f "usebackq tokens=*" %%D in ("%TEMP%\ffprobe_dur.tmp") do set "FFPROBE_DUR=%%D"
+del "%TEMP%\ffprobe_dur.tmp" 2>nul
+if not defined FFPROBE_DUR goto :eof
+if "!FFPROBE_DUR!"=="" goto :eof
+for /f "tokens=*" %%L in ('python "%~dp0check_gpu.py" duration "!FFPROBE_DUR!" 2^>nul') do set "%%L"
 goto :eof
 
 :: ============================================================

@@ -6,6 +6,7 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
 
 - **Generate subtitles** from video files using Whisper (runs fully offline, on your machine)
 - **Translate SRT files** to any language via AI (Gemini CLI or Claude Code)
+- **Generate + Translate** in one go — set language and target upfront, walk away
 - Auto-detects source language of SRT files
 - Smart target language menu — never offers translation to the same language as source
 - AI detects content genre/type before translating for more natural, context-aware results
@@ -94,6 +95,17 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
 2. Source language is auto-detected from the file content
 3. Choose target language — source language is excluded from the list
 4. Translation runs via Gemini (primary) → Claude (fallback if Gemini fails)
+
+### Menu [3] — Generate + Translate (Set & Forget)
+
+1. Select a video file (or all files)
+2. Choose a Whisper model
+3. Choose the source language (or Auto-detect)
+4. Choose output format
+5. Choose target language — asked upfront before processing starts
+6. Confirm — Whisper runs, then translation starts automatically with no further prompts
+
+> Use this when you want to walk away and come back to find everything done.
 
 ### Output Files
 

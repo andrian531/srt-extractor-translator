@@ -121,3 +121,19 @@ if __name__ == "__main__":
         else:
             print("RECOMMENDED_MODEL=medium")
             print("RECOMMENDED_REASON=no GPU: medium runs well on CPU")
+
+    elif mode == "duration":
+        dur_str = sys.argv[2] if len(sys.argv) > 2 else "0"
+        try:
+            secs = float(dur_str)
+            minutes = int(secs // 60)
+            hours = minutes // 60
+            mins_rem = minutes - hours * 60
+            print(f"VID_MIN={minutes}")
+            if hours > 0:
+                print(f"VID_HHMM={hours}h {mins_rem}m")
+            else:
+                print(f"VID_HHMM={minutes}m")
+        except Exception:
+            print("VID_MIN=0")
+            print("VID_HHMM=unknown")
