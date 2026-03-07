@@ -1,0 +1,6 @@
+Place your video files in this folder before running whisper-subtitle.bat
+
+Supported formats: mp4, mkv, avi, mov, ts, m4v, flv, wmv, webm, mpeg, mpg
+
+Output files (subtitles, translations, temp cache) will be saved here next to each video.
+Do not delete this file — it keeps the folder tracked by git.

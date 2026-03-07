@@ -61,3 +61,6 @@ Thumbs.db
 #processed result file
 .installed
 *.srt
+
+# Translation temp cache folders
+*_tmp/

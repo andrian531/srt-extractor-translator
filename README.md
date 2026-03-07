@@ -72,7 +72,12 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
 
 ## Usage
 
-Double-click `whisper-subtitle.bat` from any folder containing your video files.
+1. **Copy your video files into the project folder** — either directly or inside a `video/` subfolder to keep things organized
+2. **Double-click `whisper-subtitle.bat`** — it will automatically detect all video and subtitle files recursively
+
+> Output files (`.srt`, translations, temp cache) are saved next to each video file — so if your videos are in `video/`, all outputs go there too, keeping the project root clean.
+>
+> Do not move just the `.bat` file alone — it requires `translate_srt.py` and `check_gpu.py` to be in the same directory.
 
 ### Menu [1] — Generate Subtitle
 
