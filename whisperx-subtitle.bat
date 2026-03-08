@@ -14,6 +14,7 @@ set "LANGUAGE="
 set "OUTPUT_FORMAT=srt"
 set "WHISPER_DEVICE=cpu"
 set "AUTO_TRANSLATE=false"
+set "OFFLINE_TRANSLATE=false"
 
 :: ============================================================
 :: QUICK DEPENDENCY CHECK
@@ -84,6 +85,8 @@ if not errorlevel 1 set "NLLB_AVAILABLE=true"
 :: MAIN MENU
 :: ============================================================
 :MAIN_LOOP
+set "AUTO_TRANSLATE=false"
+set "OFFLINE_TRANSLATE=false"
 cls
 echo ============================================================
 echo   WHISPERX SUBTITLE EXTRACTOR
@@ -95,16 +98,20 @@ if not "!GPU_DEVICE!"=="cpu" (
 )
 echo ============================================================
 echo.
-echo   [1] Generate Subtitle    - extract subtitles from video files
-echo   [2] Translate Subtitle   - translate .srt files to another language
-echo   [3] Generate + Translate - extract then auto-translate (set ^& forget)
-echo   [4] Cleanup SRT          - fix overlaps and merge short segments
+echo   [1] Generate Subtitle          - extract subtitles from video files
+echo   [2] Translate Subtitle         - translate .srt files ^(Gemini + NLLB^)
+echo   [3] Generate + Translate       - extract then auto-translate ^(set ^& forget^)
+echo   [4] Cleanup SRT                - fix overlaps and merge short segments
+echo   [5] Translate Offline          - translate .srt files using NLLB only
+echo   [6] Generate + Translate Offline - extract then translate offline ^(NLLB only^)
 echo.
-set /p MAIN_MENU="Choose [1-4]: "
+set /p MAIN_MENU="Choose [1-6]: "
 
 if "!MAIN_MENU!"=="2" goto MENU_TRANSLATE
 if "!MAIN_MENU!"=="3" goto MENU_GENERATE_TRANSLATE
 if "!MAIN_MENU!"=="4" goto MENU_CLEANUP
+if "!MAIN_MENU!"=="5" goto MENU_TRANSLATE_OFFLINE
+if "!MAIN_MENU!"=="6" goto MENU_GT_OFFLINE
 goto MENU_GENERATE
 
 :: ============================================================
@@ -266,6 +273,302 @@ echo   Cleanup complete!
 echo ============================================================
 echo.
 goto RETURN_OR_QUIT
+
+:: ============================================================
+:: MENU: TRANSLATE OFFLINE (NLLB only)
+:: ============================================================
+:MENU_TRANSLATE_OFFLINE
+cls
+echo ============================================================
+echo   TRANSLATE OFFLINE ^(NLLB only^)
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+if "!NLLB_AVAILABLE!"=="false" (
+    echo  [ERROR] NLLB not installed.
+    echo  Install NLLB : pip install transformers sentencepiece sacremoses
+    echo  Then re-run to verify.
+    goto RETURN_OR_QUIT
+)
+echo  [OK] NLLB : offline ^(local model^)
+echo  [INFO] Gemini is skipped. All translation done offline via NLLB.
+echo.
+
+echo  Scanning for subtitle files (.srt) in: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+set "SIDX=0"
+for /r "%SCRIPT_DIR%" %%f in (*.srt) do (
+    echo %%~nf | findstr /ri "_EN$\|_ID$\|_JA$\|_KO$\|_ZH$\|_TRANSLATED$" >nul
+    if errorlevel 1 (
+        set /a SIDX+=1
+        set "SFILE_!SIDX!=%%f"
+        set "SREL=%%f"
+        set "SREL=!SREL:%SCRIPT_DIR%\=!"
+        echo  [!SIDX!] !SREL!
+    )
+)
+
+if !SIDX!==0 (
+    echo  No .srt files found.
+    goto RETURN_OR_QUIT
+)
+
+echo.
+echo  Found: !SIDX! subtitle file(s)
+echo.
+
+:OFFLINE_CHOOSE_SRT
+set "SCHOICE="
+set /p SCHOICE="Enter file number (1-!SIDX!) or 'all': "
+
+if /i "!SCHOICE!"=="all" goto OFFLINE_TRANSLATE_ALL
+if "!SCHOICE!"=="" goto OFFLINE_CHOOSE_SRT
+set /a STEST=!SCHOICE! 2>nul
+if !STEST! LSS 1 goto OFFLINE_INVALID_SRT
+if !STEST! GTR !SIDX! goto OFFLINE_INVALID_SRT
+
+set "DETECT_FILE=!SFILE_%SCHOICE%!"
+call :DETECT_SRT_LANG
+call :CHOOSE_TARGET_LANG
+echo.
+call :RUN_TRANSLATE_OFFLINE "!SFILE_%SCHOICE%!"
+goto OFFLINE_TRANSLATE_DONE
+
+:OFFLINE_INVALID_SRT
+echo  [!] Invalid input
+goto OFFLINE_CHOOSE_SRT
+
+:OFFLINE_TRANSLATE_ALL
+set "DETECT_FILE=!SFILE_1!"
+call :DETECT_SRT_LANG
+call :CHOOSE_TARGET_LANG
+echo.
+for /l %%i in (1,1,!SIDX!) do (
+    echo  [%%i/!SIDX!] Translating: !SFILE_%%i!
+    call :RUN_TRANSLATE_OFFLINE "!SFILE_%%i!"
+)
+
+:OFFLINE_TRANSLATE_DONE
+echo.
+echo ============================================================
+echo   Offline translation complete!
+echo ============================================================
+echo.
+goto RETURN_OR_QUIT
+
+:: ============================================================
+:: MENU: GENERATE + TRANSLATE OFFLINE (NLLB only)
+:: ============================================================
+:MENU_GT_OFFLINE
+cls
+echo ============================================================
+echo   GENERATE + TRANSLATE OFFLINE ^(NLLB only^)
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+if "!NLLB_AVAILABLE!"=="false" (
+    echo  [WARN] NLLB not installed. Translation step will be skipped.
+    echo  Install NLLB : pip install transformers sentencepiece sacremoses
+    echo.
+)
+echo  [INFO] Gemini is skipped. Translation done offline via NLLB.
+echo.
+
+echo  Scanning for video files in: %SCRIPT_DIR%
+echo  [SRT] = subtitle already exists
+echo ============================================================
+echo.
+
+set "IDX=0"
+for /r "%SCRIPT_DIR%" %%f in (
+    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
+) do (
+    set /a IDX+=1
+    set "FILE_!IDX!=%%f"
+    set "REL=%%f"
+    set "REL=!REL:%SCRIPT_DIR%\=!"
+    set "SMARK=     "
+    if exist "%%~dpn.srt" set "SMARK=[SRT]"
+    echo  [!IDX!] !SMARK! !REL!
+)
+
+if !IDX!==0 (
+    echo  No video files found in this folder.
+    goto RETURN_OR_QUIT
+)
+
+echo.
+echo  Found: !IDX! video file(s)
+echo.
+
+:GTO_CHOOSE_FILE
+set "CHOICE="
+set /p CHOICE="Enter file number (1-!IDX!) or 'all': "
+
+if /i "!CHOICE!"=="all" goto GTO_CHOOSE_OPTIONS
+if "!CHOICE!"=="" goto GTO_CHOOSE_FILE
+set /a TEST_CHOICE=!CHOICE! 2>nul
+if !TEST_CHOICE! LSS 1 goto GTO_INVALID_CHOICE
+if !TEST_CHOICE! GTR !IDX! goto GTO_INVALID_CHOICE
+goto GTO_CHOOSE_OPTIONS
+
+:GTO_INVALID_CHOICE
+echo  [!] Invalid input
+goto GTO_CHOOSE_FILE
+
+:GTO_CHOOSE_OPTIONS
+set "VID_MIN=0"
+set "VID_HHMM=unknown"
+if /i not "!CHOICE!"=="all" (
+    set "VIDEO_FILE=!FILE_%CHOICE%!"
+    call :GET_VIDEO_DURATION
+)
+echo.
+echo ============================================================
+echo   TRANSCRIPTION OPTIONS  (WhisperX)
+echo ============================================================
+if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
+    echo  Duration : !VID_HHMM!
+    if "!CUDA_OK!"=="false" (
+        if !VID_MIN! GTR 60 echo  [TIP] Long video on CPU -- 'small' for speed, 'medium' for quality
+    ) else (
+        if !VID_MIN! GTR 90 echo  [TIP] Long video -- 'large-v3-turbo' for speed, 'large-v3' for max accuracy
+    )
+    echo ============================================================
+)
+echo.
+
+set "WX_CACHE=%USERPROFILE%\.cache\huggingface\hub"
+set "M1=tiny"
+set "M2=base"
+set "M3=small"
+set "M4=medium"
+set "M5=large-v1"
+set "M6=large-v2"
+set "M7=large-v3"
+set "M8=large-v3-turbo"
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "ST_%%i=          "
+    if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "ST_%%i=[downloaded]"
+)
+
+echo  Select model:
+echo  -----------------------------------------------------------
+echo   [1] tiny              ~75 MB    !ST_1!
+echo   [2] base             ~145 MB    !ST_2!
+echo   [3] small            ~466 MB    !ST_3!
+echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
+echo   [5] large-v1         ~3.0 GB    !ST_5!
+echo   [6] large-v2         ~3.0 GB    !ST_6!
+echo   [7] large-v3         ~3.0 GB    !ST_7!
+echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
+echo  -----------------------------------------------------------
+echo.
+set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
+
+if "!MODEL_CHOICE!"=="1" set MODEL=tiny
+if "!MODEL_CHOICE!"=="2" set MODEL=base
+if "!MODEL_CHOICE!"=="3" set MODEL=small
+if "!MODEL_CHOICE!"=="4" set MODEL=medium
+if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
+if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
+if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
+if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
+if "!MODEL_CHOICE!"==""  set MODEL=medium
+
+echo.
+echo  Source language of the video:
+echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
+echo   [2] Japanese
+echo   [3] Korean
+echo   [4] Chinese (Mandarin)
+echo   [5] Cantonese
+echo   [6] Indonesian
+echo   [7] English
+echo   [8] Other (type manually)
+echo.
+set /p LANG_CHOICE="Choose language [1-8, default=1]: "
+
+if "!LANG_CHOICE!"=="1" set LANGUAGE=
+if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
+if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
+if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
+if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
+if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
+if "!LANG_CHOICE!"=="7" set LANGUAGE=English
+if "!LANG_CHOICE!"=="8" (
+    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
+)
+if "!LANG_CHOICE!"==""  set LANGUAGE=
+
+echo.
+echo  Output format:
+echo   [1] srt  - most compatible   [DEFAULT]
+echo   [2] vtt  - for web
+echo   [3] txt  - plain text without timestamps
+echo   [4] all  - generate all formats
+echo.
+set /p FMT_CHOICE="Choose format [1-4, default=1]: "
+
+if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
+if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
+if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
+if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
+if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
+
+set "SRT_LANG=unknown"
+if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
+if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
+if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
+if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
+
+call :CHOOSE_TARGET_LANG
+
+echo.
+echo ============================================================
+echo   SUMMARY:
+if /i "!CHOICE!"=="all" (
+    echo   Files   : ALL !IDX! files
+) else (
+    echo   File    : !FILE_%CHOICE%!
+)
+echo   Engine  : WhisperX
+echo   Model   : !MODEL!
+if "!LANGUAGE!"=="" (
+    echo   Language: Auto-detect
+) else (
+    echo   Language: !LANGUAGE!
+)
+echo   Device  : !WHISPER_DEVICE!
+echo   Output  : .!OUTPUT_FORMAT!
+echo   Translate to: !TARGET_LANG! ^(NLLB offline^)
+echo ============================================================
+echo.
+set /p CONFIRM="Continue? (Y/N): "
+if /i not "!CONFIRM!"=="Y" goto GTO_CHOOSE_FILE
+
+set "AUTO_TRANSLATE=true"
+set "OFFLINE_TRANSLATE=true"
+
+if /i "!CHOICE!"=="all" goto GTO_PROCESS_ALL
+
+set "TARGET_FILE=!FILE_%CHOICE%!"
+call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GTO_PROCESS_ALL
+for /l %%i in (1,1,!IDX!) do (
+    echo.
+    echo  [%%i/!IDX!] Processing: !FILE_%%i!
+    call :RUN_WHISPER "!FILE_%%i!"
+)
+goto DONE
 
 :: ============================================================
 :: MENU: GENERATE + TRANSLATE (set & forget)
@@ -704,7 +1007,11 @@ if exist "!SRT_FILE!" (
             set "DETECT_FILE=!SRT_FILE!"
             call :DETECT_SRT_LANG
         )
-        call :RUN_TRANSLATE "!SRT_FILE!"
+        if "!OFFLINE_TRANSLATE!"=="true" (
+            call :RUN_TRANSLATE_OFFLINE "!SRT_FILE!"
+        ) else (
+            call :RUN_TRANSLATE "!SRT_FILE!"
+        )
     ) else (
         set /p TRANSLATE_NOW="  Translate subtitle? (Y/N, default=N): "
         if /i "!TRANSLATE_NOW!"=="Y" (
@@ -856,6 +1163,23 @@ if not "!GEMINI_CMD!"=="" (
     echo  [*] Gemini not found. Translating with NLLB ^(offline^)...
     python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!"
 )
+goto :eof
+
+:: ============================================================
+:: SUBROUTINE: Run translation OFFLINE (NLLB only, no Gemini)
+:: Input : file path (arg), TARGET_LANG, NLLB_AVAILABLE
+:: ============================================================
+:RUN_TRANSLATE_OFFLINE
+set "TRANS_FILE=%~1"
+
+if "!NLLB_AVAILABLE!"=="false" (
+    echo  [INFO] NLLB not available. Skipping offline translation.
+    echo  Install NLLB : pip install transformers sentencepiece sacremoses
+    goto :eof
+)
+
+echo  [*] Translating offline with NLLB...
+python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!"
 goto :eof
 
 :: ============================================================

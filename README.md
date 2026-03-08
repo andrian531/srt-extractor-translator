@@ -6,7 +6,9 @@ Extract subtitles from any video file using OpenAI Whisper or WhisperX (local, o
 
 - **Generate subtitles** from video files using Whisper or WhisperX (runs fully offline, on your machine)
 - **Translate SRT files** to any language — Gemini CLI (primary) with NLLB as offline gap-fill and fallback
+- **Translate Offline** — translate using NLLB only, no internet required, Gemini completely bypassed
 - **Generate + Translate** in one go — set language and target upfront, walk away
+- **Generate + Translate Offline** — same as above but uses NLLB only, fully offline
 - **Cleanup SRT** — fix timestamp overlaps and merge very short segments into one
 - Auto-detects source language of SRT files
 - Smart target language menu — never offers translation to the same language as source
@@ -105,14 +107,6 @@ If Gemini is not installed, translation runs fully offline via NLLB. NLLB requir
 3. Choose target language — source language is excluded from the list
 4. Translation runs via Gemini (primary) → NLLB offline (gap-fill and fallback)
 
-### Menu [4] — Cleanup SRT
-
-1. Select an existing `.srt` file (or all files)
-2. Script fixes overlapping timestamps and merges segments shorter than 1.2 seconds with fewer than 15 characters into the next segment
-3. Output saved as `filename_clean.srt` — original file is not modified
-
-> Useful for cleaning up Whisper output before translation, or fixing timing issues after editing.
-
 ### Menu [3] — Generate + Translate (Set & Forget)
 
 1. Select a video file (or all files)
@@ -123,6 +117,34 @@ If Gemini is not installed, translation runs fully offline via NLLB. NLLB requir
 6. Confirm — Whisper runs, then translation starts automatically with no further prompts
 
 > Use this when you want to walk away and come back to find everything done.
+
+### Menu [4] — Cleanup SRT
+
+1. Select an existing `.srt` file (or all files)
+2. Script fixes overlapping timestamps and merges segments shorter than 1.2 seconds with fewer than 15 characters into the next segment
+3. Output saved as `filename_clean.srt` — original file is not modified
+
+> Useful for cleaning up Whisper output before translation, or fixing timing issues after editing.
+
+### Menu [5] — Translate Offline (NLLB only)
+
+1. Select an existing `.srt` file (or all files)
+2. Source language is auto-detected from the file content
+3. Choose target language
+4. Translation runs entirely via NLLB — no Gemini, no internet required
+
+> Use this when you have no internet access or want to keep everything fully local. NLLB model (~1.3 GB) is downloaded once and cached.
+
+### Menu [6] — Generate + Translate Offline (Set & Forget)
+
+1. Select a video file (or all files)
+2. Choose a Whisper model
+3. Choose the source language (or Auto-detect)
+4. Choose output format
+5. Choose target language — asked upfront before processing starts
+6. Confirm — Whisper runs, then NLLB translation starts automatically
+
+> Fully offline from start to finish. No Gemini needed. Ideal for air-gapped environments or when internet is unavailable.
 
 ### Output Files
 
