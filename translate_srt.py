@@ -360,6 +360,17 @@ def _translate_nllb_only(srt_path, output_path, target_lang, source_lang, script
             f.write(f"{idx}\n{ts}\n{text}\n\n")
 
     translated_count = sum(1 for orig, trans in zip(blocks, translated_blocks) if orig[2] != trans[2])
+
+    # Preview first 5 translated segments
+    shown = 0
+    for orig, trans in zip(blocks, translated_blocks):
+        if orig[2] != trans[2] and shown < 5:
+            if shown == 0:
+                print(f"\n  [Preview]")
+            preview = trans[2][:70] + ("..." if len(trans[2]) > 70 else "")
+            print(f"    [{trans[0]}] {preview}")
+            shown += 1
+
     print(f"  [DONE] {translated_count}/{total} segments translated")
     print(f"  Saved  : {output_path}")
 
@@ -460,6 +471,7 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
     print(f"  Temp folder    : {tmp_dir}")
 
     translated_blocks = []
+    source_map = {}  # idx -> engine that provided translation
 
     LANG_NAMES = {
         "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
@@ -565,6 +577,11 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
             for idx, ts, text in batch:
                 translated_blocks.append((idx, ts, text))
 
+    # Record which segments were translated by Gemini (pass 1)
+    for orig, trans in zip(blocks, translated_blocks):
+        if orig[2] != trans[2]:
+            source_map[orig[0]] = "gemini"
+
     # -----------------------------------------------------------------------
     # Second pass: NLLB fills segments Gemini couldn't translate
     # -----------------------------------------------------------------------
@@ -578,6 +595,7 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                 trans_map = {idx: txt for idx, ts, txt in translated_blocks}
                 for idx, val in nllb_results.items():
                     trans_map[idx] = val
+                    source_map[idx] = "nllb"
                     nllb_count += 1
                 translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
                 print(f"  [NLLB] Filled {nllb_count}/{len(untranslated)} gap(s)")
@@ -672,12 +690,14 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                         for idx, ts, text in mb:
                             if idx in mb_translated:
                                 trans_map[idx] = mb_translated[idx]
+                                source_map[idx] = "gemini_retry"
                     else:
                         # Gemini retry failed — use NLLB fallback (repetitive but still a translation)
                         nllb_used = 0
                         for idx, ts, text in mb:
                             if idx in nllb_fallback:
                                 trans_map[idx] = nllb_fallback[idx]
+                                source_map[idx] = "nllb_fallback"
                                 nllb_used += 1
                         if nllb_used:
                             print(f"      [!] Using NLLB fallback for {nllb_used} segment(s)")
@@ -772,6 +792,7 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                     for idx, ts, text in rb:
                         if idx in rb_translated:
                             trans_map[idx] = rb_translated[idx]
+                            source_map[idx] = "gemini_retry"
 
             translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
 
@@ -802,6 +823,31 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
         print(f"  [!] Temp folder kept for debugging: {tmp_dir}")
         print(f"      Check *_raw.txt files to see engine output")
         exit_code = 1
+
+    # Quality report
+    gemini_c   = sum(1 for v in source_map.values() if v == "gemini")
+    nllb_c     = sum(1 for v in source_map.values() if v == "nllb")
+    retry_c    = sum(1 for v in source_map.values() if v == "gemini_retry")
+    fallback_c = sum(1 for v in source_map.values() if v == "nllb_fallback")
+    untrans_c  = total - translated_count
+    parts = []
+    if gemini_c:   parts.append(f"Gemini: {gemini_c}")
+    if nllb_c:     parts.append(f"NLLB: {nllb_c}")
+    if retry_c:    parts.append(f"Retry: {retry_c}")
+    if fallback_c: parts.append(f"Fallback: {fallback_c}")
+    if untrans_c:  parts.append(f"Untranslated: {untrans_c}")
+    if parts:
+        print(f"  [Report] " + "  |  ".join(parts))
+
+    # Preview first 5 translated segments
+    shown = 0
+    for orig, trans in zip(blocks, translated_blocks):
+        if orig[2] != trans[2] and shown < 5:
+            if shown == 0:
+                print(f"\n  [Preview]")
+            preview = trans[2][:70] + ("..." if len(trans[2]) > 70 else "")
+            print(f"    [{trans[0]}] {preview}")
+            shown += 1
 
     print(f"  [DONE] {translated_count}/{total} segments translated")
     print(f"  Saved  : {output_path}")

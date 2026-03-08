@@ -97,11 +97,13 @@ echo.
 echo   [1] Generate Subtitle    - extract subtitles from video files
 echo   [2] Translate Subtitle   - translate .srt files to another language
 echo   [3] Generate + Translate - extract then auto-translate (set ^& forget)
+echo   [4] Cleanup SRT          - fix overlaps and merge short segments
 echo.
-set /p MAIN_MENU="Choose [1-3]: "
+set /p MAIN_MENU="Choose [1-4]: "
 
 if "!MAIN_MENU!"=="2" goto MENU_TRANSLATE
 if "!MAIN_MENU!"=="3" goto MENU_GENERATE_TRANSLATE
+if "!MAIN_MENU!"=="4" goto MENU_CLEANUP
 goto MENU_GENERATE
 
 :: ============================================================
@@ -189,6 +191,80 @@ for /l %%i in (1,1,!SIDX!) do (
 echo.
 echo ============================================================
 echo   Translation complete!
+echo ============================================================
+echo.
+goto RETURN_OR_QUIT
+
+:: ============================================================
+:: MENU: CLEANUP SRT
+:: ============================================================
+:MENU_CLEANUP
+cls
+echo ============================================================
+echo   CLEANUP SRT
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+echo  Fixes timestamp overlaps and merges very short segments.
+echo  Output saved as: original_clean.srt
+echo.
+
+echo  Scanning for subtitle files (.srt) in: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+set "CIDX=0"
+for /r "%SCRIPT_DIR%" %%f in (*.srt) do (
+    echo %%~nf | findstr /ri "_clean$\|_EN$\|_ID$\|_JA$\|_KO$\|_ZH$\|_TRANSLATED$" >nul
+    if errorlevel 1 (
+        set /a CIDX+=1
+        set "CFILE_!CIDX!=%%f"
+        set "CREL=%%f"
+        set "CREL=!CREL:%SCRIPT_DIR%\=!"
+        echo  [!CIDX!] !CREL!
+    )
+)
+
+if !CIDX!==0 (
+    echo  No .srt files found.
+    goto RETURN_OR_QUIT
+)
+
+echo.
+echo  Found: !CIDX! subtitle file(s)
+echo.
+
+:CLEANUP_CHOOSE
+set "CCHOICE="
+set /p CCHOICE="Enter file number (1-!CIDX!) or 'all': "
+
+if /i "!CCHOICE!"=="all" goto CLEANUP_RUN_ALL
+if "!CCHOICE!"=="" goto CLEANUP_CHOOSE
+set /a CTEST=!CCHOICE! 2>nul
+if !CTEST! LSS 1 goto CLEANUP_INVALID
+if !CTEST! GTR !CIDX! goto CLEANUP_INVALID
+
+echo.
+echo  Cleaning: !CFILE_%CCHOICE%!
+python "%~dp0cleanup_srt.py" "!CFILE_%CCHOICE%!"
+goto CLEANUP_DONE
+
+:CLEANUP_INVALID
+echo  [!] Invalid input
+goto CLEANUP_CHOOSE
+
+:CLEANUP_RUN_ALL
+echo.
+for /l %%i in (1,1,!CIDX!) do (
+    echo  [%%i/!CIDX!] !CFILE_%%i!
+    python "%~dp0cleanup_srt.py" "!CFILE_%%i!"
+    echo.
+)
+
+:CLEANUP_DONE
+echo.
+echo ============================================================
+echo   Cleanup complete!
 echo ============================================================
 echo.
 goto RETURN_OR_QUIT
