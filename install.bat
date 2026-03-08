@@ -353,6 +353,8 @@ echo  Models stored in: !WX_CACHE!\
 echo.
 
 set "WX_DEFAULT=S"
+set "WX_S1=~75 MB " & set "WX_S2=~145 MB" & set "WX_S3=~466 MB" & set "WX_S4=~1.5 GB"
+set "WX_S5=~3.0 GB" & set "WX_S6=~3.0 GB" & set "WX_S7=~3.0 GB" & set "WX_S8=~1.62 GB"
 
 :WX_MODEL_LOOP
 for %%i in (1 2 3 4 5 6 7 8) do (
@@ -367,7 +369,7 @@ echo  ------------------------------------------------------------------------
 echo   No  Model              Size      VRAM       Status
 echo  ------------------------------------------------------------------------
 for %%i in (1 2 3 4 5 6 7 8) do (
-    echo   [%%i] !M%%i!          !S%%i!    !V%%i!     !WX_ST_%%i!
+    echo   [%%i] !M%%i!          !WX_S%%i!    !V%%i!     !WX_ST_%%i!
 )
 echo  ------------------------------------------------------------------------
 echo   [A] Download ALL WhisperX models
