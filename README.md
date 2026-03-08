@@ -7,6 +7,7 @@ Extract subtitles from any video file using OpenAI Whisper or WhisperX (local, o
 - **Generate subtitles** from video files using Whisper or WhisperX (runs fully offline, on your machine)
 - **Translate SRT files** to any language — Gemini CLI (primary) with NLLB as offline gap-fill and fallback
 - **Generate + Translate** in one go — set language and target upfront, walk away
+- **Cleanup SRT** — fix timestamp overlaps and merge very short segments into one
 - Auto-detects source language of SRT files
 - Smart target language menu — never offers translation to the same language as source
 - AI detects content genre/type before translating for more natural, context-aware results
@@ -14,6 +15,8 @@ Extract subtitles from any video file using OpenAI Whisper or WhisperX (local, o
 - Batch-based translation with resume support — safe to interrupt and continue
 - Gemini primary, NLLB offline fallback — translation works even without internet
 - Anti-repetition measures for NLLB output with Gemini retry for edge cases
+- Translation quality report — shows how many segments came from Gemini, NLLB, retry, or fallback
+- Translation preview — displays first 5 translated segments after each run
 - Menu stays open after completion or error — return to menu or quit
 - Supports: English, Indonesian, Japanese, Korean, Chinese, and any other language
 
@@ -102,6 +105,14 @@ If Gemini is not installed, translation runs fully offline via NLLB. NLLB requir
 3. Choose target language — source language is excluded from the list
 4. Translation runs via Gemini (primary) → NLLB offline (gap-fill and fallback)
 
+### Menu [4] — Cleanup SRT
+
+1. Select an existing `.srt` file (or all files)
+2. Script fixes overlapping timestamps and merges segments shorter than 1.2 seconds with fewer than 15 characters into the next segment
+3. Output saved as `filename_clean.srt` — original file is not modified
+
+> Useful for cleaning up Whisper output before translation, or fixing timing issues after editing.
+
 ### Menu [3] — Generate + Translate (Set & Forget)
 
 1. Select a video file (or all files)
@@ -137,9 +148,11 @@ If Gemini is not installed, translation runs fully offline via NLLB. NLLB requir
 ## Tested On
 
 - OS: Windows 11 Pro
-- Python: 3.11
+- Python: 3.13
 - Whisper: openai-whisper (latest)
-- PyTorch: CUDA 12.x
+- WhisperX: 3.8.1
+- PyTorch: 2.6.0+cu124
+- NLLB: facebook/nllb-200-distilled-1.3B
 
 ## Project Structure
 
@@ -148,9 +161,22 @@ whisper-subtitle.bat    — main menu using OpenAI Whisper
 whisperx-subtitle.bat   — main menu using WhisperX (faster, word-level timestamps)
 install.bat             — one-time setup wizard
 translate_srt.py        — translation engine (Gemini primary, NLLB offline fallback)
+cleanup_srt.py          — SRT post-processor (fix overlaps, merge short segments)
 check_gpu.py            — GPU detection and PyTorch verification
 ```
 
 ## License
 
-MIT — free to use, modify, and distribute.
+The scripts in this repository (`*.bat`, `*.py`) are licensed under the **MIT License** — free to use, modify, and distribute, including for commercial purposes.
+
+### Third-Party Model Licenses
+
+| Component | License | Commercial Use |
+|-----------|---------|----------------|
+| [openai-whisper](https://github.com/openai/whisper) | MIT | Yes |
+| [WhisperX](https://github.com/m-bain/whisperX) | MIT | Yes |
+| [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | MIT | Yes |
+| [HuggingFace Transformers](https://github.com/huggingface/transformers) | Apache 2.0 | Yes |
+| [NLLB-200 model](https://huggingface.co/facebook/nllb-200-distilled-1.3B) (Meta) | CC BY-NC 4.0 | **No** |
+
+> **Important:** The NLLB translation model (`facebook/nllb-200-distilled-*`) is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) — **non-commercial use only**. If you use this tool commercially, disable NLLB and use Gemini or another engine instead.
