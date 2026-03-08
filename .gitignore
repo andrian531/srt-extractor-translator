@@ -60,7 +60,11 @@ Thumbs.db
 
 #processed result file
 .installed
+.engine
 *.srt
 
 # Translation temp cache folders
 *_tmp/
+
+# HuggingFace token (contains secret)
+.hf_token

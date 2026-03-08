@@ -246,15 +246,26 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
     blocks = parse_srt(content)
     if not blocks:
         print("  [ERROR] No text found in SRT file")
-        return False
+        return 1
 
-    # Detect genre/content type for better translation context
+    tmp_dir = output_path + "_tmp"
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    # Detect genre/content type (cached in tmp_dir)
+    genre_cache_file = os.path.join(tmp_dir, "genre.txt")
     print(f"  Detecting content genre...")
-    genre = detect_genre(claude_cmd, engine_type, srt_path)
-    if genre:
+    if os.path.exists(genre_cache_file):
+        with open(genre_cache_file, "r", encoding="utf-8") as f:
+            genre = f.read().strip()
         print(f"  Genre          : {genre}")
     else:
-        print(f"  Genre          : (not detected, proceeding without)")
+        genre = detect_genre(claude_cmd, engine_type, srt_path)
+        if genre:
+            print(f"  Genre          : {genre}")
+            with open(genre_cache_file, "w", encoding="utf-8") as f:
+                f.write(genre)
+        else:
+            print(f"  Genre          : (not detected, proceeding without)")
 
     total = len(blocks)
     print(f"  Total segments : {total}")
@@ -272,12 +283,12 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
     if not ok:
         print(f"  [ERROR] {engine_label} not responding: {msg}")
         print(f"          Token limit may be exhausted or connection issue.")
-        return False
+        return 1
     print(f"  [OK] {engine_label} responsive ({msg[:50]})")
     print(f"  Translating in batches...")
 
-    MAX_TOKENS_PER_BATCH = 300
-    GEMINI_BATCH_DELAY   = 3    # seconds between batches (Gemini only)
+    MAX_TOKENS_PER_BATCH = 150
+    GEMINI_BATCH_DELAY   = 5    # seconds between batches (Gemini only)
     MAX_RETRY            = 2    # retry attempts on failure or timeout
 
     def est_tok(text):
@@ -301,11 +312,17 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
     total_batch = len(batches)
     print(f"  Total batches  : {total_batch} (max ~{MAX_TOKENS_PER_BATCH} tokens/batch)")
 
-    tmp_dir = output_path + "_tmp"
-    os.makedirs(tmp_dir, exist_ok=True)
     print(f"  Temp folder    : {tmp_dir}")
 
     translated_blocks = []
+
+    LANG_NAMES = {
+        "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
+        "en": "English",  "id": "Indonesian",
+    }
+    src_label = LANG_NAMES.get(source_lang, "") if source_lang else ""
+    from_clause = f" from {src_label}" if src_label else ""
+    genre_line = f"Content type: {genre}\n" if genre else ""
 
     for batch_num, batch in enumerate(batches, 1):
         batch_tokens = sum(est_tok(t) for _, _, t in batch)
@@ -335,14 +352,6 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
         print(f"  Batch {batch_num}/{total_batch} ({len(batch)} segments, ~{batch_tokens} tokens)...", end="", flush=True)
 
         lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in batch]
-
-        LANG_NAMES = {
-            "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
-            "en": "English",  "id": "Indonesian",
-        }
-        src_label = LANG_NAMES.get(source_lang, "") if source_lang else ""
-        from_clause = f" from {src_label}" if src_label else ""
-        genre_line = f"Content type: {genre}\n" if genre else ""
 
         prompt = (
             f"You are a professional subtitle translator.\n"
@@ -408,11 +417,105 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
             print(f" ERROR")
             print(f"  [ERROR] Cannot run {engine_label}: {e}")
             print(f"          Path: {claude_cmd}")
-            return False
+            return 1
         except Exception as e:
             print(f" ERROR: {type(e).__name__}: {e}")
             for idx, ts, text in batch:
                 translated_blocks.append((idx, ts, text))
+
+    # Second pass: retry segments still untranslated after main batch loop
+    untranslated = [orig for orig, trans in zip(blocks, translated_blocks) if orig[2] == trans[2]]
+    if untranslated:
+        print(f"  [+] Second pass: {len(untranslated)} untranslated segments...")
+        retry_batches = []
+        cur_b, cur_t = [], 0
+        for block in untranslated:
+            t = est_tok(block[2])
+            if cur_t + t > MAX_TOKENS_PER_BATCH and cur_b:
+                retry_batches.append(cur_b)
+                cur_b, cur_t = [block], t
+            else:
+                cur_b.append(block)
+                cur_t += t
+        if cur_b:
+            retry_batches.append(cur_b)
+
+        trans_map = {idx: txt for idx, ts, txt in translated_blocks}
+
+        for rb_num, rb in enumerate(retry_batches, 1):
+            rb_tokens = sum(est_tok(t) for _, _, t in rb)
+            rb_cache = os.path.join(tmp_dir, f"retry_{rb[0][0]:06d}.txt")
+
+            if os.path.exists(rb_cache):
+                with open(rb_cache, "r", encoding="utf-8") as f:
+                    cached = f.read()
+                rb_cached = {}
+                for line in cached.strip().split("\n"):
+                    m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                    if m and m.group(2).strip():
+                        rb_cached[m.group(1)] = m.group(2)
+                matched = sum(1 for idx, _, _ in rb if idx in rb_cached)
+                if matched > 0:
+                    print(f"  Retry {rb_num}/{len(retry_batches)} - from cache ({matched}/{len(rb)})")
+                    for idx, ts, text in rb:
+                        if idx in rb_cached:
+                            trans_map[idx] = rb_cached[idx]
+                    continue
+
+            if engine_type == "gemini":
+                time.sleep(GEMINI_BATCH_DELAY)
+
+            print(f"  Retry {rb_num}/{len(retry_batches)} ({len(rb)} seg, ~{rb_tokens} tok)...", end="", flush=True)
+
+            lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in rb]
+            prompt = (
+                f"You are a professional subtitle translator.\n"
+                f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
+                f"{genre_line}"
+                "\nGuidelines:\n"
+                "- Write natural, fluent translations that feel native in the target language\n"
+                "- Preserve the speaker's tone, emotion, and personality (casual, formal, excited, sad, etc.)\n"
+                "- Adapt idioms and cultural expressions naturally — avoid word-for-word literal translation\n"
+                "- Use vocabulary and phrasing appropriate to the content type above\n"
+                "- Keep translations concise so they are easy to read quickly as subtitles\n"
+                "- Keep the [number] prefix on each line exactly as-is\n"
+                "- Output ONLY the translated lines, no comments or explanations\n\n"
+                + "\n".join(lines_to_translate)
+            )
+
+            rc, stdout, stderr = -1, "", ""
+            for attempt in range(1, MAX_RETRY + 2):
+                rc, stdout, stderr = run_translate_prompt(claude_cmd, engine_type, prompt)
+                if rc == 0 and stdout.strip():
+                    break
+                if attempt <= MAX_RETRY:
+                    wait = attempt * 5
+                    tag = "TIMEOUT" if stderr == "TIMEOUT" else f"rc={rc}"
+                    print(f" {tag}, retry {attempt}/{MAX_RETRY} in {wait}s...", end="", flush=True)
+                    time.sleep(wait)
+
+            if rc != 0 or not stdout.strip():
+                print(f" FAILED (rc={rc})")
+                continue
+
+            rb_translated = {}
+            for line in stdout.strip().split("\n"):
+                m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                if m:
+                    rb_translated[m.group(1)] = m.group(2)
+
+            matched = sum(1 for idx, _, _ in rb if idx in rb_translated)
+            print(f" OK ({matched}/{len(rb)})")
+
+            if matched > 0:
+                with open(rb_cache, "w", encoding="utf-8") as f:
+                    for idx, _, _ in rb:
+                        f.write(f"[{idx}] {rb_translated.get(idx, '')}\n")
+                for idx, ts, text in rb:
+                    if idx in rb_translated:
+                        trans_map[idx] = rb_translated[idx]
+
+        translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
 
     with open(output_path, "w", encoding="utf-8") as f:
         for idx, ts, text in translated_blocks:
@@ -427,15 +530,18 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
         import shutil as _shutil
         _shutil.rmtree(tmp_dir, ignore_errors=True)
         print(f"  [OK] Temp folder removed")
+        exit_code = 0
     elif translated_count > 0:
         print(f"  [!] Partial translation — temp folder kept for resume: {tmp_dir}")
+        exit_code = 2
     else:
         print(f"  [!] Temp folder kept for debugging: {tmp_dir}")
         print(f"      Check *_raw.txt files to see engine output")
+        exit_code = 1
 
     print(f"  [DONE] {translated_count}/{total} segments translated")
     print(f"  Saved  : {output_path}")
-    return True
+    return exit_code
 
 
 if __name__ == "__main__":
@@ -525,5 +631,5 @@ if __name__ == "__main__":
     print(f"  Original SRT : preserved")
     print()
 
-    success = translate_with_claude(chosen_cmd, srt_path, output_path, chosen_type, target_lang, detected_lang)
-    sys.exit(0 if success else 1)
+    result = translate_with_claude(chosen_cmd, srt_path, output_path, chosen_type, target_lang, detected_lang)
+    sys.exit(result if isinstance(result, int) else (0 if result else 1))
