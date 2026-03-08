@@ -61,6 +61,7 @@ Thumbs.db
 #processed result file
 .installed
 .engine
+.nllb
 *.srt
 
 # Translation temp cache folders

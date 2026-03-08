@@ -12,7 +12,7 @@ set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 set "MODEL=medium"
 set "LANGUAGE="
 set "OUTPUT_FORMAT=srt"
-set "WHISPER_DEVICE=cuda"
+set "WHISPER_DEVICE=cpu"
 set "AUTO_TRANSLATE=false"
 
 :: ============================================================
@@ -44,38 +44,21 @@ if errorlevel 1 (
 :: GPU CHECK
 :: ============================================================
 set "CUDA_OK=false"
+set "GPU_DEVICE=cpu"
 set "GPU_NAME="
 set "VRAM="
 for /f "tokens=*" %%L in ('python "%~dp0check_gpu.py" verify 2^>nul') do (
     set "%%L"
 )
-if not "!CUDA_OK!"=="true" set "WHISPER_DEVICE=cpu"
+set "WHISPER_DEVICE=!GPU_DEVICE!"
+if "!WHISPER_DEVICE!"=="mps" set "WHISPER_DEVICE=cpu"
 
 :: ============================================================
-:: ENGINE DETECTION (Claude / Gemini for translation)
+:: ENGINE DETECTION (Gemini / NLLB for translation)
 :: ============================================================
-set "CLAUDE_CMD="
 set "GEMINI_CMD="
+set "NLLB_AVAILABLE=false"
 
-for %%c in (claude claude-code claudecode) do (
-    if "!CLAUDE_CMD!"=="" (
-        where %%c >nul 2>&1
-        if not errorlevel 1 set "CLAUDE_CMD=%%c"
-    )
-)
-if "!CLAUDE_CMD!"=="" (
-    for %%p in (
-        "%APPDATA%\npm\claude.cmd"
-        "%APPDATA%\npm\claude"
-        "%LOCALAPPDATA%\npm\claude.cmd"
-        "%LOCALAPPDATA%\npm\claude"
-        "%ProgramFiles%\nodejs\claude.cmd"
-    ) do (
-        if "!CLAUDE_CMD!"=="" (
-            if exist %%p set "CLAUDE_CMD=%%~p"
-        )
-    )
-)
 for %%c in (gemini gemini-cli) do (
     if "!GEMINI_CMD!"=="" (
         where %%c >nul 2>&1
@@ -94,15 +77,18 @@ if "!GEMINI_CMD!"=="" (
         )
     )
 )
+python -c "import transformers" >nul 2>&1
+if not errorlevel 1 set "NLLB_AVAILABLE=true"
 
 :: ============================================================
 :: MAIN MENU
 :: ============================================================
+:MAIN_LOOP
 cls
 echo ============================================================
 echo   WHISPERX SUBTITLE EXTRACTOR
 echo   Folder: %SCRIPT_DIR%
-if "!CUDA_OK!"=="true" (
+if not "!GPU_DEVICE!"=="cpu" (
     echo   GPU   : !GPU_NAME! ^(!VRAM!^)
 ) else (
     echo   GPU   : CPU mode
@@ -130,16 +116,15 @@ echo   Folder: %SCRIPT_DIR%
 echo ============================================================
 echo.
 
-if "!CLAUDE_CMD!"=="" if "!GEMINI_CMD!"=="" (
+if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
     echo  [ERROR] No translation engine found.
-    echo  Install Claude : npm install -g @anthropic-ai/claude-code
     echo  Install Gemini : npm install -g @google/gemini-cli
+    echo  Install NLLB   : pip install transformers sentencepiece sacremoses
     echo  Then re-run install.bat to verify.
-    pause
-    exit /b 1
+    goto RETURN_OR_QUIT
 )
-if not "!CLAUDE_CMD!"=="" echo  [OK] Claude : !CLAUDE_CMD!
 if not "!GEMINI_CMD!"=="" echo  [OK] Gemini : !GEMINI_CMD!
+if "!NLLB_AVAILABLE!"=="true" echo  [OK] NLLB   : offline ^(local model^)
 echo.
 
 echo  Scanning for subtitle files (.srt) in: %SCRIPT_DIR%
@@ -160,8 +145,7 @@ for /r "%SCRIPT_DIR%" %%f in (*.srt) do (
 
 if !SIDX!==0 (
     echo  No .srt files found.
-    pause
-    exit /b 0
+    goto RETURN_OR_QUIT
 )
 
 echo.
@@ -205,8 +189,7 @@ echo ============================================================
 echo   Translation complete!
 echo ============================================================
 echo.
-pause
-exit /b 0
+goto RETURN_OR_QUIT
 
 :: ============================================================
 :: MENU: GENERATE + TRANSLATE (set & forget)
@@ -219,10 +202,10 @@ echo   Folder: %SCRIPT_DIR%
 echo ============================================================
 echo.
 
-if "!CLAUDE_CMD!"=="" if "!GEMINI_CMD!"=="" (
+if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
     echo  [WARN] No translation engine found. Translation step will be skipped.
-    echo  Install Claude : npm install -g @anthropic-ai/claude-code
     echo  Install Gemini : npm install -g @google/gemini-cli
+    echo  Install NLLB   : pip install transformers sentencepiece sacremoses
     echo.
 )
 
@@ -246,8 +229,7 @@ for /r "%SCRIPT_DIR%" %%f in (
 
 if !IDX!==0 (
     echo  No video files found in this folder.
-    pause
-    exit /b 0
+    goto RETURN_OR_QUIT
 )
 
 echo.
@@ -449,8 +431,7 @@ for /r "%SCRIPT_DIR%" %%f in (
 
 if !IDX!==0 (
     echo  No video files found in this folder.
-    pause
-    exit /b 0
+    goto RETURN_OR_QUIT
 )
 
 echo.
@@ -778,47 +759,26 @@ goto :eof
 
 :: ============================================================
 :: SUBROUTINE: Run translation
+:: Gemini primary (+ NLLB auto gap-fill inside translate_srt.py)
+:: Fallback to NLLB-only if Gemini not installed
+:: Input : file path (arg), TARGET_LANG, GEMINI_CMD, NLLB_AVAILABLE
 :: ============================================================
 :RUN_TRANSLATE
 set "TRANS_FILE=%~1"
-set "TRANS_SUCCESS=false"
-set "GEMINI_PARTIAL=false"
 
-if "!GEMINI_CMD!"=="" if "!CLAUDE_CMD!"=="" (
-    echo  [INFO] No translation engine available. Install Claude or Gemini first.
+if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
+    echo  [INFO] No translation engine available.
+    echo  Install Gemini : npm install -g @google/gemini-cli
+    echo  Install NLLB   : pip install transformers sentencepiece sacremoses
     goto :eof
 )
 
 if not "!GEMINI_CMD!"=="" (
-    echo  [1] Trying Gemini...
+    echo  [*] Translating with Gemini ^(+ NLLB for gaps^)...
     python "%~dp0translate_srt.py" "!TRANS_FILE!" "!GEMINI_CMD!" "gemini" "!TARGET_LANG!"
-    set "GEMINI_EC=!errorlevel!"
-    if "!GEMINI_EC!"=="0" set "TRANS_SUCCESS=true"
-    if "!GEMINI_EC!"=="2" set "GEMINI_PARTIAL=true"
-)
-
-if "!GEMINI_PARTIAL!"=="true" (
-    if not "!CLAUDE_CMD!"=="" (
-        echo.
-        echo  [!] Gemini partial translation detected.
-        set /p RETRY_CLAUDE="  Try with Claude to complete remaining segments? (Y/N): "
-        if /i "!RETRY_CLAUDE!"=="Y" (
-            echo  [2] Trying Claude...
-            python "%~dp0translate_srt.py" "!TRANS_FILE!" "!CLAUDE_CMD!" "claude" "!TARGET_LANG!"
-        )
-    )
-    goto :eof
-)
-
-if "!TRANS_SUCCESS!"=="false" (
-    if not "!CLAUDE_CMD!"=="" (
-        if not "!GEMINI_CMD!"=="" (
-            echo  [!] Gemini failed ^(0 translations^), using Claude as fallback...
-        ) else (
-            echo  [2] Trying Claude...
-        )
-        python "%~dp0translate_srt.py" "!TRANS_FILE!" "!CLAUDE_CMD!" "claude" "!TARGET_LANG!"
-    )
+) else (
+    echo  [*] Gemini not found. Translating with NLLB ^(offline^)...
+    python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!"
 )
 goto :eof
 
@@ -846,4 +806,12 @@ echo ============================================================
 echo   All done!
 echo ============================================================
 echo.
-pause
+goto RETURN_OR_QUIT
+
+:RETURN_OR_QUIT
+echo.
+echo   [M] Back to main menu   [Q] Quit
+echo.
+set /p _RQCHOICE="Choose [M/Q, default=M]: "
+if /i "!_RQCHOICE!"=="Q" exit /b 0
+goto MAIN_LOOP

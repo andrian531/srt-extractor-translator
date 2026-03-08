@@ -96,9 +96,20 @@ if __name__ == "__main__":
             print("TORCH_URL=none")
 
     elif mode == "verify":
-        ok = check_pytorch_cuda()
-        print("CUDA_OK=true" if ok else "CUDA_OK=false")
-        if ok:
+        cuda_ok = False
+        mps_ok  = False
+        try:
+            import torch
+            cuda_ok = torch.cuda.is_available()
+            if not cuda_ok:
+                mps_ok = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        except ImportError:
+            pass
+
+        print("CUDA_OK=true" if cuda_ok else "CUDA_OK=false")
+
+        if cuda_ok:
+            print("GPU_DEVICE=cuda")
             try:
                 import torch
                 vram_gb = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
@@ -116,11 +127,28 @@ if __name__ == "__main__":
                 else:
                     print("RECOMMENDED_MODEL=small")
                     print("RECOMMENDED_REASON=<4GB VRAM: small recommended to avoid OOM")
+                if vram_gb >= 4:
+                    print("NLLB_RECOMMENDED=1.3B")
+                    print("NLLB_RECOMMENDED_REASON=GPU with 4GB+ VRAM: 1.3B model gives better accuracy")
+                else:
+                    print("NLLB_RECOMMENDED=600M")
+                    print("NLLB_RECOMMENDED_REASON=<4GB VRAM: 600M model is safer")
             except Exception:
                 pass
+        elif mps_ok:
+            print("GPU_DEVICE=mps")
+            print("GPU_NAME=Apple Silicon (MPS)")
+            print("VRAM=shared")
+            print("RECOMMENDED_MODEL=large-v3-turbo")
+            print("RECOMMENDED_REASON=Apple Silicon MPS: large-v3-turbo recommended")
+            print("NLLB_RECOMMENDED=1.3B")
+            print("NLLB_RECOMMENDED_REASON=Apple MPS available: 1.3B model supported")
         else:
+            print("GPU_DEVICE=cpu")
             print("RECOMMENDED_MODEL=medium")
             print("RECOMMENDED_REASON=no GPU: medium runs well on CPU")
+            print("NLLB_RECOMMENDED=600M")
+            print("NLLB_RECOMMENDED_REASON=no GPU detected: 600M model runs well on CPU")
 
     elif mode == "duration":
         dur_str = sys.argv[2] if len(sys.argv) > 2 else "0"

@@ -24,14 +24,16 @@ echo.
 echo   [1] Uninstall WhisperX  (whisperx + faster-whisper + model cache)
 echo   [2] Uninstall Whisper   (openai-whisper + model cache)
 echo   [3] Uninstall both
-echo   [4] Cancel
+echo   [4] Uninstall NLLB      (transformers packages + model cache)
+echo   [5] Cancel
 echo.
-set /p CHOICE="Choose [1-4]: "
+set /p CHOICE="Choose [1-5]: "
 
-if "!CHOICE!"=="4" exit /b 0
+if "!CHOICE!"=="5" exit /b 0
 if "!CHOICE!"=="1" goto UNINSTALL_WHISPERX
 if "!CHOICE!"=="2" goto UNINSTALL_WHISPER
 if "!CHOICE!"=="3" goto UNINSTALL_BOTH
+if "!CHOICE!"=="4" goto UNINSTALL_NLLB
 echo  Invalid choice.
 pause
 exit /b 0
@@ -106,6 +108,38 @@ if /i not "!DEL_ALL!"=="N" (
     )
 )
 goto CLEANUP
+
+:UNINSTALL_NLLB
+echo.
+echo  Uninstalling NLLB packages...
+pip uninstall transformers sentencepiece sacremoses accelerate tokenizers -y 2>nul
+echo  [OK] NLLB packages removed
+
+echo.
+set /p DEL_NLLB="  Delete NLLB model cache? (Y/N, default=Y): "
+if /i not "!DEL_NLLB!"=="N" (
+    set "HF_HUB=%USERPROFILE%\.cache\huggingface\hub"
+    if exist "!HF_HUB!" (
+        for /d %%D in ("!HF_HUB!\models--facebook--nllb-*") do (
+            echo  Removing: %%~nxD
+            rmdir /s /q "%%D" 2>nul
+        )
+        echo  [OK] NLLB model cache removed
+    ) else (
+        echo  [INFO] No NLLB cache found
+    )
+)
+if exist "%SCRIPT_DIR%\.nllb" (
+    del "%SCRIPT_DIR%\.nllb"
+    echo  [OK] .nllb marker removed
+)
+echo.
+echo ============================================================
+echo  [DONE] NLLB uninstall complete.
+echo ============================================================
+echo.
+pause
+exit /b 0
 
 :CLEANUP
 echo.

@@ -77,6 +77,8 @@ set "GPU_NAME=none"
 set "VRAM="
 set "RECOMMENDED_MODEL=medium"
 set "RECOMMENDED_REASON=default"
+set "NLLB_RECOMMENDED=600M"
+set "NLLB_RECOMMENDED_REASON=default"
 
 for /f "tokens=*" %%L in ('python "%~dp0check_gpu.py" detect 2^>nul') do (
     set "%%L"
@@ -100,19 +102,31 @@ echo ============================================================
 echo   Choose transcription engine:
 echo ============================================================
 echo.
-echo   [1] WhisperX
+
+set "WX_LABEL=   "
+set "W_LABEL= "
+if "!CURRENT_ENGINE!"=="whisperx" set "WX_LABEL=[installed]"
+if "!CURRENT_ENGINE!"=="whisper"  set "W_LABEL=[installed]"
+
+echo   [1] WhisperX  !WX_LABEL!
 echo       + Faster (CTranslate2 backend, up to 4-8x faster)
 echo       + More precise timestamps (word-level alignment)
 echo       + Better transcription accuracy
 echo       - Larger model size (large-v3-turbo ~1.62 GB vs ~809 MB)
 echo.
-echo   [2] Whisper (standard OpenAI)
+echo   [2] Whisper (standard OpenAI)  !W_LABEL!
 echo       + Well-tested, widely compatible
 echo       + Simpler installation
 echo       - Slower than WhisperX
 echo.
 
-if "!CUDA_OK!"=="true" (
+if "!CURRENT_ENGINE!"=="whisperx" (
+    set "ENG_DEFAULT=1"
+    echo   Current install: WhisperX ^(press Enter to keep^)
+) else if "!CURRENT_ENGINE!"=="whisper" (
+    set "ENG_DEFAULT=2"
+    echo   Current install: Whisper ^(press Enter to keep^)
+) else if "!CUDA_OK!"=="true" (
     echo   GPU recommendation: [1] WhisperX
     echo   Reason: GPU detected, WhisperX will run significantly faster
     set "ENG_DEFAULT=1"
@@ -336,7 +350,7 @@ echo  Tip: Disable Cloudflare/firewall if download is slow or fails.
 echo.
 set /p MODEL_DL="Choose [1-8 / A / S, default=!MODEL_DL_DEFAULT!]: "
 if "!MODEL_DL!"=="" set "MODEL_DL=!MODEL_DL_DEFAULT!"
-if /i "!MODEL_DL!"=="S" goto FINISH
+if /i "!MODEL_DL!"=="S" goto NLLB_SECTION
 if /i "!MODEL_DL!"=="A" goto MODEL_DOWNLOAD_ALL
 set /a DL_IDX=!MODEL_DL! 2>nul
 if !DL_IDX! LSS 1 goto MODEL_LOOP
@@ -394,7 +408,7 @@ echo  ------------------------------------------------------------------------
 echo.
 set /p WX_DL="Choose [1-8 / A / S, default=!WX_DEFAULT!]: "
 if "!WX_DL!"=="" set "WX_DL=!WX_DEFAULT!"
-if /i "!WX_DL!"=="S" goto FINISH
+if /i "!WX_DL!"=="S" goto NLLB_SECTION
 if /i "!WX_DL!"=="A" goto WX_DL_ALL
 set /a WX_IDX=!WX_DL! 2>nul
 if !WX_IDX! LSS 1 goto WX_MODEL_LOOP
@@ -409,6 +423,101 @@ for %%i in (1 2 3 4 5 6 7 8) do (
     call :DOWNLOAD_WX_MODEL !M%%i!
 )
 goto WX_MODEL_LOOP
+
+:: ============================================================
+:: STEP 5c: NLLB Translation Model (offline, local)
+:: ============================================================
+:NLLB_SECTION
+echo.
+echo [5c] NLLB Translation Model ^(offline, local^)
+echo  Used by translate engine as gap-filler when Gemini misses segments.
+echo  Packages: transformers sentencepiece sacremoses accelerate
+echo.
+
+set "NLLB_PKG_OK=false"
+python -c "import transformers" >nul 2>&1
+if not errorlevel 1 (
+    echo  [OK] transformers already installed
+    set "NLLB_PKG_OK=true"
+) else (
+    set /p INSTALL_NLLB_PKG="  Install NLLB packages? (Y/N, default=Y): "
+    if /i not "!INSTALL_NLLB_PKG!"=="N" (
+        pip install transformers sentencepiece sacremoses accelerate
+        if errorlevel 1 (
+            echo  [WARN] Some NLLB packages may not have installed correctly
+        ) else (
+            echo  [OK] NLLB packages installed
+            set "NLLB_PKG_OK=true"
+        )
+    )
+)
+
+if "!NLLB_PKG_OK!"=="false" (
+    echo  [INFO] NLLB skipped. You can install it later and re-run install.bat.
+    goto FINISH
+)
+
+set "HF_HUB=%USERPROFILE%\.cache\huggingface\hub"
+set "NLLB_600M_DIR=!HF_HUB!\models--facebook--nllb-200-distilled-600M"
+set "NLLB_1B3_DIR=!HF_HUB!\models--facebook--nllb-200-distilled-1.3B"
+
+set "NLLB_600M_ST=            "
+set "NLLB_1B3_ST=            "
+if exist "!NLLB_600M_DIR!\" set "NLLB_600M_ST=[downloaded]"
+if exist "!NLLB_1B3_DIR!\"  set "NLLB_1B3_ST=[downloaded]"
+
+if "!NLLB_RECOMMENDED!"=="1.3B" (
+    set "NLLB_600M_REC=             "
+    set "NLLB_1B3_REC=[RECOMMENDED]"
+    set "NLLB_DEFAULT=2"
+) else (
+    set "NLLB_600M_REC=[RECOMMENDED]"
+    set "NLLB_1B3_REC=             "
+    set "NLLB_DEFAULT=1"
+)
+
+:NLLB_MODEL_LOOP
+echo.
+echo  NLLB Models:
+echo  -------------------------------------------------------------------
+echo   [1] nllb-200-distilled-600M   ~2.4 GB   !NLLB_600M_ST!  !NLLB_600M_REC!
+echo   [2] nllb-200-distilled-1.3B   ~5.0 GB   !NLLB_1B3_ST!   !NLLB_1B3_REC!
+echo   [S] Skip
+echo  -------------------------------------------------------------------
+echo   Recommendation: !NLLB_RECOMMENDED! ^(!NLLB_RECOMMENDED_REASON!^)
+echo.
+set /p NLLB_DL="Choose [1-2 / S, default=!NLLB_DEFAULT!]: "
+if "!NLLB_DL!"=="" set "NLLB_DL=!NLLB_DEFAULT!"
+if /i "!NLLB_DL!"=="S" goto FINISH
+if "!NLLB_DL!"=="1" goto NLLB_DL_600M
+if "!NLLB_DL!"=="2" goto NLLB_DL_1B3
+goto NLLB_MODEL_LOOP
+
+:NLLB_DL_600M
+echo.
+echo  Downloading nllb-200-distilled-600M...
+python -c "from transformers import AutoModelForSeq2SeqLM, AutoTokenizer; AutoTokenizer.from_pretrained('facebook/nllb-200-distilled-600M'); AutoModelForSeq2SeqLM.from_pretrained('facebook/nllb-200-distilled-600M')"
+if errorlevel 1 (
+    echo  [ERROR] Failed to download 600M model
+    goto NLLB_MODEL_LOOP
+)
+echo  [OK] nllb-200-distilled-600M downloaded
+echo 600M>"%SCRIPT_DIR%\.nllb"
+echo  [OK] Model preference saved to .nllb
+goto FINISH
+
+:NLLB_DL_1B3
+echo.
+echo  Downloading nllb-200-distilled-1.3B...
+python -c "from transformers import AutoModelForSeq2SeqLM, AutoTokenizer; AutoTokenizer.from_pretrained('facebook/nllb-200-distilled-1.3B'); AutoModelForSeq2SeqLM.from_pretrained('facebook/nllb-200-distilled-1.3B')"
+if errorlevel 1 (
+    echo  [ERROR] Failed to download 1.3B model
+    goto NLLB_MODEL_LOOP
+)
+echo  [OK] nllb-200-distilled-1.3B downloaded
+echo 1.3B>"%SCRIPT_DIR%\.nllb"
+echo  [OK] Model preference saved to .nllb
+goto FINISH
 
 :FINISH
 echo installed > "%SCRIPT_DIR%\.installed"

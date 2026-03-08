@@ -5,29 +5,31 @@ import subprocess
 import time
 
 
-def detect_claude_cmd():
-    import shutil
-    for cmd in ["claude", "claude-code", "claudecode"]:
-        found = shutil.which(cmd)
-        if found:
-            return found
-    appdata = os.environ.get("APPDATA", "")
-    localappdata = os.environ.get("LOCALAPPDATA", "")
-    programfiles = os.environ.get("ProgramFiles", "")
-    programfiles86 = os.environ.get("ProgramFiles(x86)", "")
-    for path in [
-        os.path.join(appdata,        "npm", "claude.cmd"),
-        os.path.join(appdata,        "npm", "claude"),
-        os.path.join(localappdata,   "npm", "claude.cmd"),
-        os.path.join(localappdata,   "npm", "claude"),
-        os.path.join(programfiles,   "nodejs", "claude.cmd"),
-        os.path.join(programfiles86, "nodejs", "claude.cmd"),
-    ]:
-        if os.path.exists(path):
-            return path
-    return None
+# ---------------------------------------------------------------------------
+# NLLB language mappings
+# ---------------------------------------------------------------------------
+NLLB_LANG_MAP = {
+    "ja": "jpn_Jpan",
+    "ko": "kor_Hang",
+    "zh": "zho_Hans",
+    "en": "eng_Latn",
+    "id": "ind_Latn",
+}
+
+TARGET_LANG_TO_CODE = {
+    "indonesian":        "id",
+    "english":           "en",
+    "japanese":          "ja",
+    "korean":            "ko",
+    "chinese":           "zh",
+    "chinese (mandarin)":"zh",
+    "mandarin":          "zh",
+}
 
 
+# ---------------------------------------------------------------------------
+# Engine detection
+# ---------------------------------------------------------------------------
 def detect_gemini_cmd():
     import shutil
     for cmd in ["gemini", "gemini-cli"]:
@@ -47,19 +49,10 @@ def detect_gemini_cmd():
     return None
 
 
-def detect_available_engines():
-    engines = {}
-    claude = detect_claude_cmd()
-    if claude:
-        engines["claude"] = claude
-    gemini = detect_gemini_cmd()
-    if gemini:
-        engines["gemini"] = gemini
-    return engines
-
-
 def resolve_cmd(cmd):
     import shutil
+    if not cmd:
+        return cmd
     if os.path.isabs(cmd) and os.path.exists(cmd):
         return cmd
     if sys.platform == "win32":
@@ -80,6 +73,9 @@ def resolve_cmd(cmd):
     return cmd
 
 
+# ---------------------------------------------------------------------------
+# SRT utilities
+# ---------------------------------------------------------------------------
 def detect_language(srt_path):
     """Detect the source language of an SRT file.
     Returns: 'en', 'id', 'ja', 'ko', 'zh', or 'unknown'
@@ -99,23 +95,19 @@ def detect_language(srt_path):
         if not text.strip():
             return "unknown"
 
-        # Japanese: hiragana / katakana characters
         hiragana_kata = sum(1 for c in text if "\u3040" <= c <= "\u30ff")
         if hiragana_kata > 5:
             return "ja"
 
-        # Korean: hangul characters
         hangul = sum(1 for c in text if "\uac00" <= c <= "\ud7a3")
         if hangul > 5:
             return "ko"
 
-        # Chinese: CJK ideographs (no kana overlap)
         cjk = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
         if cjk > 50 and hiragana_kata == 0 and hangul == 0:
             return "zh"
 
         text_lower = text.lower()
-
         id_words = [
             "yang", "dan", "ini", "itu", "tidak", "ada", "dengan",
             "untuk", "saya", "kamu", "aku", "adalah", "sudah", "akan", "bisa",
@@ -158,6 +150,9 @@ def estimate_token_cost(blocks):
     return estimated_input, estimated_output
 
 
+# ---------------------------------------------------------------------------
+# Gemini helpers
+# ---------------------------------------------------------------------------
 def check_engine_responsive(engine_cmd, engine_type):
     try:
         result = subprocess.run(
@@ -178,9 +173,6 @@ def check_engine_responsive(engine_cmd, engine_type):
 
 
 def detect_genre(engine_cmd, engine_type, srt_path, sample_lines=60):
-    """Ask the AI to identify the genre/type of content from a sample of the SRT.
-    Returns a short genre description string, or empty string if detection fails.
-    """
     try:
         with open(srt_path, "r", encoding="utf-8", errors="replace") as f:
             raw = f.read(12000)
@@ -209,7 +201,6 @@ def detect_genre(engine_cmd, engine_type, srt_path, sample_lines=60):
 
         rc, stdout, _ = run_translate_prompt(engine_cmd, engine_type, prompt)
         if rc == 0 and stdout.strip():
-            # Take first line only, cap at 300 chars
             return stdout.strip().split("\n")[0][:300]
         return ""
     except Exception:
@@ -233,11 +224,167 @@ def run_translate_prompt(engine_cmd, engine_type, prompt):
         return -3, "", str(e)
 
 
-def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude", target_lang="Indonesian", source_lang=""):
-    claude_cmd = resolve_cmd(claude_cmd)
-    engine_label = "Claude" if engine_type == "claude" else "Gemini"
-    print(f"  Engine         : {engine_label}")
-    print(f"  Path           : {claude_cmd}")
+# ---------------------------------------------------------------------------
+# NLLB local translation
+# ---------------------------------------------------------------------------
+def get_nllb_model(script_dir=None):
+    """Return NLLB model name based on .nllb marker file."""
+    if script_dir:
+        nllb_file = os.path.join(script_dir, ".nllb")
+        if os.path.exists(nllb_file):
+            with open(nllb_file, "r", encoding="utf-8") as f:
+                ver = f.read().strip()
+            if "1.3B" in ver:
+                return "facebook/nllb-200-distilled-1.3B"
+    return "facebook/nllb-200-distilled-600M"
+
+
+def translate_with_nllb(blocks, source_lang, target_lang_name, script_dir=None):
+    """Translate blocks using local NLLB model.
+    Returns dict {idx: translated_text} for successfully translated segments.
+    Raises ImportError if transformers is not installed.
+    """
+    target_code = TARGET_LANG_TO_CODE.get(target_lang_name.lower(), "")
+    if not target_code:
+        print(f"  [NLLB] Unknown target language: {target_lang_name}")
+        return {}
+
+    src_nllb = NLLB_LANG_MAP.get(source_lang, "")
+    tgt_nllb = NLLB_LANG_MAP.get(target_code, "")
+
+    if not src_nllb:
+        print(f"  [NLLB] No NLLB mapping for source: {source_lang}")
+        return {}
+    if not tgt_nllb:
+        print(f"  [NLLB] No NLLB mapping for target: {target_lang_name}")
+        return {}
+
+    from transformers import pipeline as hf_pipeline  # raises ImportError if missing
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = 0
+            device_label = "GPU (CUDA/ROCm)"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+            device_label = "GPU (Apple MPS)"
+        else:
+            device = -1
+            device_label = "CPU"
+    except ImportError:
+        device = -1
+        device_label = "CPU"
+
+    model_name = get_nllb_model(script_dir)
+    print(f"  [NLLB] Loading {model_name} on {device_label} (src={src_nllb} tgt={tgt_nllb})...")
+    translator = hf_pipeline(
+        "translation",
+        model=model_name,
+        src_lang=src_nllb,
+        tgt_lang=tgt_nllb,
+        device=device,
+    )
+
+    def _has_repetition(text, ngram=4, threshold=3):
+        """Return True if any n-gram repeats more than threshold times."""
+        words = text.split()
+        if len(words) < ngram * threshold:
+            return False
+        counts = {}
+        for i in range(len(words) - ngram + 1):
+            key = tuple(words[i:i + ngram])
+            counts[key] = counts.get(key, 0) + 1
+            if counts[key] >= threshold:
+                return True
+        return False
+
+    results = {}
+    fallback = {}  # repetitive results — used if Gemini retry also fails
+    for idx, ts, text in blocks:
+        try:
+            out = translator(
+                text,
+                max_length=512,
+                no_repeat_ngram_size=3,
+                repetition_penalty=1.2,
+            )
+            if out:
+                translated = out[0].get("translation_text", "").strip()
+                if translated and not _has_repetition(translated):
+                    results[idx] = translated
+                elif translated:
+                    print(f"  [NLLB] Repetition detected [{idx}], flagged for Gemini retry")
+                    fallback[idx] = translated
+        except Exception as e:
+            print(f"  [NLLB] Error on [{idx}]: {e}")
+
+    return results, fallback
+
+
+def _translate_nllb_only(srt_path, output_path, target_lang, source_lang, script_dir):
+    """Full NLLB-only translation (used when Gemini is not available)."""
+    print(f"  Engine         : NLLB (offline)")
+    print(f"  Target language: {target_lang}")
+
+    with open(srt_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    blocks = parse_srt(content)
+    if not blocks:
+        print("  [ERROR] No text found in SRT file")
+        return 1
+
+    total = len(blocks)
+    print(f"  Total segments : {total}")
+
+    try:
+        results, nllb_fallback = translate_with_nllb(blocks, source_lang, target_lang, script_dir)
+        # In NLLB-only mode: no Gemini available, use fallback directly for repetitive segments
+        for idx, txt in nllb_fallback.items():
+            if idx not in results:
+                results[idx] = txt
+    except ImportError:
+        print("  [ERROR] transformers not installed. Run: pip install transformers sentencepiece sacremoses")
+        return 1
+    except Exception as e:
+        print(f"  [ERROR] NLLB failed: {e}")
+        return 1
+
+    translated_blocks = []
+    for idx, ts, text in blocks:
+        translated_blocks.append((idx, ts, results.get(idx, text)))
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        for idx, ts, text in translated_blocks:
+            f.write(f"{idx}\n{ts}\n{text}\n\n")
+
+    translated_count = sum(1 for orig, trans in zip(blocks, translated_blocks) if orig[2] != trans[2])
+    print(f"  [DONE] {translated_count}/{total} segments translated")
+    print(f"  Saved  : {output_path}")
+
+    if translated_count == total:
+        return 0
+    elif translated_count > 0:
+        return 2
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# Main translation function (Gemini primary + NLLB second pass)
+# ---------------------------------------------------------------------------
+def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
+                        target_lang="Indonesian", source_lang=""):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # NLLB-only mode
+    if engine_type == "nllb":
+        return _translate_nllb_only(srt_path, output_path, target_lang, source_lang, script_dir)
+
+    # Gemini primary mode
+    engine_cmd = resolve_cmd(engine_cmd)
+    print(f"  Engine         : Gemini")
+    print(f"  Path           : {engine_cmd}")
     print(f"  Target language: {target_lang}")
 
     with open(srt_path, "r", encoding="utf-8", errors="replace") as f:
@@ -251,7 +398,7 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
     tmp_dir = output_path + "_tmp"
     os.makedirs(tmp_dir, exist_ok=True)
 
-    # Detect genre/content type (cached in tmp_dir)
+    # Genre detection (cached in tmp_dir)
     genre_cache_file = os.path.join(tmp_dir, "genre.txt")
     print(f"  Detecting content genre...")
     if os.path.exists(genre_cache_file):
@@ -259,7 +406,7 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
             genre = f.read().strip()
         print(f"  Genre          : {genre}")
     else:
-        genre = detect_genre(claude_cmd, engine_type, srt_path)
+        genre = detect_genre(engine_cmd, engine_type, srt_path)
         if genre:
             print(f"  Genre          : {genre}")
             with open(genre_cache_file, "w", encoding="utf-8") as f:
@@ -273,23 +420,22 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
     est_input, est_output = estimate_token_cost(blocks)
     est_total = est_input + est_output
     cost = (est_input / 1_000_000 * 3.0) + (est_output / 1_000_000 * 15.0)
-    print(f"  Est. tokens    : ~{est_total:,} ({est_input:,} input + {est_output:,} output)")
+    print(f"  Est. tokens    : ~{est_total:,} ({est_input:,} in + {est_output:,} out)")
     print(f"  Est. cost      : ~${cost:.4f}")
     if est_total > 50_000:
         print(f"  [!] Large file - this may take a while")
 
-    print(f"  Checking {engine_label}...")
-    ok, msg = check_engine_responsive(claude_cmd, engine_type)
+    print(f"  Checking Gemini...")
+    ok, msg = check_engine_responsive(engine_cmd, engine_type)
     if not ok:
-        print(f"  [ERROR] {engine_label} not responding: {msg}")
-        print(f"          Token limit may be exhausted or connection issue.")
+        print(f"  [ERROR] Gemini not responding: {msg}")
         return 1
-    print(f"  [OK] {engine_label} responsive ({msg[:50]})")
+    print(f"  [OK] Gemini responsive ({msg[:50]})")
     print(f"  Translating in batches...")
 
     MAX_TOKENS_PER_BATCH = 150
-    GEMINI_BATCH_DELAY   = 5    # seconds between batches (Gemini only)
-    MAX_RETRY            = 2    # retry attempts on failure or timeout
+    GEMINI_BATCH_DELAY   = 5
+    MAX_RETRY            = 2
 
     def est_tok(text):
         return max(1, len(text) // 4)
@@ -311,7 +457,6 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
 
     total_batch = len(batches)
     print(f"  Total batches  : {total_batch} (max ~{MAX_TOKENS_PER_BATCH} tokens/batch)")
-
     print(f"  Temp folder    : {tmp_dir}")
 
     translated_blocks = []
@@ -320,9 +465,9 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
         "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
         "en": "English",  "id": "Indonesian",
     }
-    src_label = LANG_NAMES.get(source_lang, "") if source_lang else ""
+    src_label  = LANG_NAMES.get(source_lang, "") if source_lang else ""
     from_clause = f" from {src_label}" if src_label else ""
-    genre_line = f"Content type: {genre}\n" if genre else ""
+    genre_line  = f"Content type: {genre}\n" if genre else ""
 
     for batch_num, batch in enumerate(batches, 1):
         batch_tokens = sum(est_tok(t) for _, _, t in batch)
@@ -346,13 +491,12 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
                 print(f"  Batch {batch_num}/{total_batch} - cache invalid, reprocessing")
                 os.remove(tmp_file)
 
-        if engine_type == "gemini" and batch_num > 1:
+        if batch_num > 1:
             time.sleep(GEMINI_BATCH_DELAY)
 
-        print(f"  Batch {batch_num}/{total_batch} ({len(batch)} segments, ~{batch_tokens} tokens)...", end="", flush=True)
+        print(f"  Batch {batch_num}/{total_batch} ({len(batch)} seg, ~{batch_tokens} tok)...", end="", flush=True)
 
         lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in batch]
-
         prompt = (
             f"You are a professional subtitle translator.\n"
             f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
@@ -371,7 +515,7 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
         try:
             rc, stdout, stderr = -1, "", ""
             for attempt in range(1, MAX_RETRY + 2):
-                rc, stdout, stderr = run_translate_prompt(claude_cmd, engine_type, prompt)
+                rc, stdout, stderr = run_translate_prompt(engine_cmd, engine_type, prompt)
                 if rc == 0 and stdout.strip():
                     break
                 if attempt <= MAX_RETRY:
@@ -387,10 +531,9 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
                 for idx, ts, text in batch:
                     translated_blocks.append((idx, ts, text))
                 continue
-            result_stdout = stdout
 
             translated_lines = {}
-            for line in result_stdout.strip().split("\n"):
+            for line in stdout.strip().split("\n"):
                 m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
                 if m:
                     translated_lines[m.group(1)] = m.group(2)
@@ -400,7 +543,7 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
 
             debug_file = os.path.join(tmp_dir, f"batch_{batch_num:04d}_raw.txt")
             with open(debug_file, "w", encoding="utf-8") as f:
-                f.write(result_stdout)
+                f.write(stdout)
 
             if matched > 0:
                 with open(tmp_file, "w", encoding="utf-8") as f:
@@ -415,108 +558,229 @@ def translate_with_claude(claude_cmd, srt_path, output_path, engine_type="claude
 
         except FileNotFoundError as e:
             print(f" ERROR")
-            print(f"  [ERROR] Cannot run {engine_label}: {e}")
-            print(f"          Path: {claude_cmd}")
+            print(f"  [ERROR] Cannot run Gemini: {e}")
             return 1
         except Exception as e:
             print(f" ERROR: {type(e).__name__}: {e}")
             for idx, ts, text in batch:
                 translated_blocks.append((idx, ts, text))
 
-    # Second pass: retry segments still untranslated after main batch loop
+    # -----------------------------------------------------------------------
+    # Second pass: NLLB fills segments Gemini couldn't translate
+    # -----------------------------------------------------------------------
     untranslated = [orig for orig, trans in zip(blocks, translated_blocks) if orig[2] == trans[2]]
     if untranslated:
-        print(f"  [+] Second pass: {len(untranslated)} untranslated segments...")
-        retry_batches = []
-        cur_b, cur_t = [], 0
-        for block in untranslated:
-            t = est_tok(block[2])
-            if cur_t + t > MAX_TOKENS_PER_BATCH and cur_b:
-                retry_batches.append(cur_b)
-                cur_b, cur_t = [block], t
+        print(f"  [+] Second pass: {len(untranslated)} untranslated segment(s)")
+        nllb_count = 0
+        try:
+            nllb_results, nllb_fallback = translate_with_nllb(untranslated, source_lang, target_lang, script_dir)
+            if nllb_results:
+                trans_map = {idx: txt for idx, ts, txt in translated_blocks}
+                for idx, val in nllb_results.items():
+                    trans_map[idx] = val
+                    nllb_count += 1
+                translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
+                print(f"  [NLLB] Filled {nllb_count}/{len(untranslated)} gap(s)")
             else:
-                cur_b.append(block)
-                cur_t += t
-        if cur_b:
-            retry_batches.append(cur_b)
+                print(f"  [NLLB] No segments translated (language pair may not be supported)")
 
-        trans_map = {idx: txt for idx, ts, txt in translated_blocks}
+            # Retry segments NLLB missed (repetition detected or error) with Gemini
+            still_missing = [b for b in untranslated if b[0] not in nllb_results]
+            if still_missing and engine_cmd:
+                print(f"  [Gemini] {len(still_missing)} NLLB-missed segment(s) — retrying with Gemini...")
+                miss_batches = []
+                cur_b, cur_t = [], 0
+                for block in still_missing:
+                    t = est_tok(block[2])
+                    if cur_t + t > MAX_TOKENS_PER_BATCH and cur_b:
+                        miss_batches.append(cur_b)
+                        cur_b, cur_t = [block], t
+                    else:
+                        cur_b.append(block)
+                        cur_t += t
+                if cur_b:
+                    miss_batches.append(cur_b)
 
-        for rb_num, rb in enumerate(retry_batches, 1):
-            rb_tokens = sum(est_tok(t) for _, _, t in rb)
-            rb_cache = os.path.join(tmp_dir, f"retry_{rb[0][0]:06d}.txt")
+                trans_map = {idx: txt for idx, ts, txt in translated_blocks}
+                for mb_num, mb in enumerate(miss_batches, 1):
+                    mb_tokens = sum(est_tok(t) for _, _, t in mb)
+                    mb_cache = os.path.join(tmp_dir, f"nllb_miss_{mb[0][0]:06}.txt")
 
-            if os.path.exists(rb_cache):
-                with open(rb_cache, "r", encoding="utf-8") as f:
-                    cached = f.read()
-                rb_cached = {}
-                for line in cached.strip().split("\n"):
-                    m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                    if m and m.group(2).strip():
-                        rb_cached[m.group(1)] = m.group(2)
-                matched = sum(1 for idx, _, _ in rb if idx in rb_cached)
-                if matched > 0:
-                    print(f"  Retry {rb_num}/{len(retry_batches)} - from cache ({matched}/{len(rb)})")
-                    for idx, ts, text in rb:
-                        if idx in rb_cached:
-                            trans_map[idx] = rb_cached[idx]
+                    if os.path.exists(mb_cache):
+                        with open(mb_cache, "r", encoding="utf-8") as f:
+                            cached = f.read()
+                        mb_cached = {}
+                        for line in cached.strip().split("\n"):
+                            mm = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                            if mm and mm.group(2).strip():
+                                mb_cached[mm.group(1)] = mm.group(2)
+                        matched = sum(1 for idx, _, _ in mb if idx in mb_cached)
+                        if matched > 0:
+                            print(f"  Gemini {mb_num}/{len(miss_batches)} - from cache ({matched}/{len(mb)})")
+                            for idx, ts, text in mb:
+                                if idx in mb_cached:
+                                    trans_map[idx] = mb_cached[idx]
+                            continue
+
+                    time.sleep(GEMINI_BATCH_DELAY)
+                    print(f"  Gemini {mb_num}/{len(miss_batches)} ({len(mb)} seg, ~{mb_tokens} tok)...", end="", flush=True)
+
+                    lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in mb]
+                    miss_prompt = (
+                        f"You are a professional subtitle translator.\n"
+                        f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
+                        f"{genre_line}"
+                        "\nGuidelines:\n"
+                        "- Write natural, fluent translations that feel native in the target language\n"
+                        "- Preserve the speaker's tone, emotion, and personality (casual, formal, excited, sad, etc.)\n"
+                        "- Adapt idioms and cultural expressions naturally — avoid word-for-word literal translation\n"
+                        "- Use vocabulary and phrasing appropriate to the content type above\n"
+                        "- Keep translations concise so they are easy to read quickly as subtitles\n"
+                        "- Keep the [number] prefix on each line exactly as-is\n"
+                        "- Output ONLY the translated lines, no comments or explanations\n\n"
+                        + "\n".join(lines_to_translate)
+                    )
+
+                    rc, stdout, stderr = -1, "", ""
+                    for attempt in range(1, MAX_RETRY + 2):
+                        rc, stdout, stderr = run_translate_prompt(engine_cmd, engine_type, miss_prompt)
+                        if rc == 0 and stdout.strip():
+                            break
+                        if attempt <= MAX_RETRY:
+                            wait = attempt * 5
+                            tag = "TIMEOUT" if stderr == "TIMEOUT" else f"rc={rc}"
+                            print(f" {tag}, retry {attempt}/{MAX_RETRY} in {wait}s...", end="", flush=True)
+                            time.sleep(wait)
+
+                    if rc != 0 or not stdout.strip():
+                        print(f" FAILED (rc={rc})")
+                        continue
+
+                    mb_translated = {}
+                    for line in stdout.strip().split("\n"):
+                        mm = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                        if mm:
+                            mb_translated[mm.group(1)] = mm.group(2)
+
+                    matched = sum(1 for idx, _, _ in mb if idx in mb_translated)
+                    print(f" OK ({matched}/{len(mb)})")
+
+                    if matched > 0:
+                        with open(mb_cache, "w", encoding="utf-8") as f:
+                            for idx, _, _ in mb:
+                                f.write(f"[{idx}] {mb_translated.get(idx, '')}\n")
+                        for idx, ts, text in mb:
+                            if idx in mb_translated:
+                                trans_map[idx] = mb_translated[idx]
+                    else:
+                        # Gemini retry failed — use NLLB fallback (repetitive but still a translation)
+                        nllb_used = 0
+                        for idx, ts, text in mb:
+                            if idx in nllb_fallback:
+                                trans_map[idx] = nllb_fallback[idx]
+                                nllb_used += 1
+                        if nllb_used:
+                            print(f"      [!] Using NLLB fallback for {nllb_used} segment(s)")
+
+                translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
+
+        except ImportError:
+            # NLLB not installed — fall back to Gemini retry (original second pass)
+            print(f"  [!] NLLB not installed — retrying remaining with Gemini...")
+            retry_batches = []
+            cur_b, cur_t = [], 0
+            for block in untranslated:
+                t = est_tok(block[2])
+                if cur_t + t > MAX_TOKENS_PER_BATCH and cur_b:
+                    retry_batches.append(cur_b)
+                    cur_b, cur_t = [block], t
+                else:
+                    cur_b.append(block)
+                    cur_t += t
+            if cur_b:
+                retry_batches.append(cur_b)
+
+            trans_map = {idx: txt for idx, ts, txt in translated_blocks}
+
+            for rb_num, rb in enumerate(retry_batches, 1):
+                rb_tokens = sum(est_tok(t) for _, _, t in rb)
+                rb_cache = os.path.join(tmp_dir, f"retry_{rb[0][0]:06}.txt")
+
+                if os.path.exists(rb_cache):
+                    with open(rb_cache, "r", encoding="utf-8") as f:
+                        cached = f.read()
+                    rb_cached = {}
+                    for line in cached.strip().split("\n"):
+                        m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                        if m and m.group(2).strip():
+                            rb_cached[m.group(1)] = m.group(2)
+                    matched = sum(1 for idx, _, _ in rb if idx in rb_cached)
+                    if matched > 0:
+                        print(f"  Retry {rb_num}/{len(retry_batches)} - from cache ({matched}/{len(rb)})")
+                        for idx, ts, text in rb:
+                            if idx in rb_cached:
+                                trans_map[idx] = rb_cached[idx]
+                        continue
+
+                time.sleep(GEMINI_BATCH_DELAY)
+                print(f"  Retry {rb_num}/{len(retry_batches)} ({len(rb)} seg, ~{rb_tokens} tok)...", end="", flush=True)
+
+                lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in rb]
+                retry_prompt = (
+                    f"You are a professional subtitle translator.\n"
+                    f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
+                    f"{genre_line}"
+                    "\nGuidelines:\n"
+                    "- Write natural, fluent translations that feel native in the target language\n"
+                    "- Preserve the speaker's tone, emotion, and personality (casual, formal, excited, sad, etc.)\n"
+                    "- Adapt idioms and cultural expressions naturally — avoid word-for-word literal translation\n"
+                    "- Use vocabulary and phrasing appropriate to the content type above\n"
+                    "- Keep translations concise so they are easy to read quickly as subtitles\n"
+                    "- Keep the [number] prefix on each line exactly as-is\n"
+                    "- Output ONLY the translated lines, no comments or explanations\n\n"
+                    + "\n".join(lines_to_translate)
+                )
+
+                rc, stdout, stderr = -1, "", ""
+                for attempt in range(1, MAX_RETRY + 2):
+                    rc, stdout, stderr = run_translate_prompt(engine_cmd, engine_type, retry_prompt)
+                    if rc == 0 and stdout.strip():
+                        break
+                    if attempt <= MAX_RETRY:
+                        wait = attempt * 5
+                        tag = "TIMEOUT" if stderr == "TIMEOUT" else f"rc={rc}"
+                        print(f" {tag}, retry {attempt}/{MAX_RETRY} in {wait}s...", end="", flush=True)
+                        time.sleep(wait)
+
+                if rc != 0 or not stdout.strip():
+                    print(f" FAILED (rc={rc})")
                     continue
 
-            if engine_type == "gemini":
-                time.sleep(GEMINI_BATCH_DELAY)
+                rb_translated = {}
+                for line in stdout.strip().split("\n"):
+                    m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                    if m:
+                        rb_translated[m.group(1)] = m.group(2)
 
-            print(f"  Retry {rb_num}/{len(retry_batches)} ({len(rb)} seg, ~{rb_tokens} tok)...", end="", flush=True)
+                matched = sum(1 for idx, _, _ in rb if idx in rb_translated)
+                print(f" OK ({matched}/{len(rb)})")
 
-            lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in rb]
-            prompt = (
-                f"You are a professional subtitle translator.\n"
-                f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
-                f"{genre_line}"
-                "\nGuidelines:\n"
-                "- Write natural, fluent translations that feel native in the target language\n"
-                "- Preserve the speaker's tone, emotion, and personality (casual, formal, excited, sad, etc.)\n"
-                "- Adapt idioms and cultural expressions naturally — avoid word-for-word literal translation\n"
-                "- Use vocabulary and phrasing appropriate to the content type above\n"
-                "- Keep translations concise so they are easy to read quickly as subtitles\n"
-                "- Keep the [number] prefix on each line exactly as-is\n"
-                "- Output ONLY the translated lines, no comments or explanations\n\n"
-                + "\n".join(lines_to_translate)
-            )
+                if matched > 0:
+                    with open(rb_cache, "w", encoding="utf-8") as f:
+                        for idx, _, _ in rb:
+                            f.write(f"[{idx}] {rb_translated.get(idx, '')}\n")
+                    for idx, ts, text in rb:
+                        if idx in rb_translated:
+                            trans_map[idx] = rb_translated[idx]
 
-            rc, stdout, stderr = -1, "", ""
-            for attempt in range(1, MAX_RETRY + 2):
-                rc, stdout, stderr = run_translate_prompt(claude_cmd, engine_type, prompt)
-                if rc == 0 and stdout.strip():
-                    break
-                if attempt <= MAX_RETRY:
-                    wait = attempt * 5
-                    tag = "TIMEOUT" if stderr == "TIMEOUT" else f"rc={rc}"
-                    print(f" {tag}, retry {attempt}/{MAX_RETRY} in {wait}s...", end="", flush=True)
-                    time.sleep(wait)
+            translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
 
-            if rc != 0 or not stdout.strip():
-                print(f" FAILED (rc={rc})")
-                continue
+        except Exception as e:
+            print(f"  [NLLB] Error: {e}")
 
-            rb_translated = {}
-            for line in stdout.strip().split("\n"):
-                m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                if m:
-                    rb_translated[m.group(1)] = m.group(2)
-
-            matched = sum(1 for idx, _, _ in rb if idx in rb_translated)
-            print(f" OK ({matched}/{len(rb)})")
-
-            if matched > 0:
-                with open(rb_cache, "w", encoding="utf-8") as f:
-                    for idx, _, _ in rb:
-                        f.write(f"[{idx}] {rb_translated.get(idx, '')}\n")
-                for idx, ts, text in rb:
-                    if idx in rb_translated:
-                        trans_map[idx] = rb_translated[idx]
-
-        translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
-
+    # -----------------------------------------------------------------------
+    # Write output file
+    # -----------------------------------------------------------------------
     with open(output_path, "w", encoding="utf-8") as f:
         for idx, ts, text in translated_blocks:
             f.write(f"{idx}\n{ts}\n{text}\n\n")
@@ -554,16 +818,15 @@ if __name__ == "__main__":
         print("Usage: python translate_srt.py <file.srt> [engine_cmd] [engine_type] [target_lang]")
         sys.exit(1)
 
-    srt_path          = sys.argv[1]
-    forced_engine_cmd = sys.argv[2] if len(sys.argv) >= 3 else None
-    forced_engine_type= sys.argv[3] if len(sys.argv) >= 4 else None
-    target_lang       = sys.argv[4] if len(sys.argv) >= 5 else "Indonesian"
+    srt_path           = sys.argv[1]
+    forced_engine_cmd  = sys.argv[2] if len(sys.argv) >= 3 else None
+    forced_engine_type = sys.argv[3] if len(sys.argv) >= 4 else None
+    target_lang        = sys.argv[4] if len(sys.argv) >= 5 else "Indonesian"
 
     if not os.path.exists(srt_path):
         print(f"[ERROR] File not found: {srt_path}")
         sys.exit(1)
 
-    # Determine output filename suffix from target language
     LANG_SUFFIX = {
         "english":           "_EN",
         "indonesian":        "_ID",
@@ -573,10 +836,9 @@ if __name__ == "__main__":
         "chinese (mandarin)":"_ZH",
         "mandarin":          "_ZH",
     }
-    suffix = LANG_SUFFIX.get(target_lang.lower(), "_TRANSLATED")
+    suffix      = LANG_SUFFIX.get(target_lang.lower(), "_TRANSLATED")
     output_path = os.path.splitext(srt_path)[0] + suffix + ".srt"
 
-    # Skip if SRT is already in the target language
     LANG_CODES = {
         "english": "en", "indonesian": "id", "japanese": "ja",
         "korean": "ko", "chinese": "zh", "chinese (mandarin)": "zh",
@@ -588,25 +850,38 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # Called from bat with engine pre-selected
-    if forced_engine_cmd and forced_engine_type:
-        chosen_cmd  = forced_engine_cmd
+    if forced_engine_cmd is not None and forced_engine_type:
+        chosen_cmd  = forced_engine_cmd if forced_engine_cmd else ""
         chosen_type = forced_engine_type
-        print(f"[OK] Engine: {chosen_type} -> {chosen_cmd}")
+        label = "NLLB (offline)" if chosen_type == "nllb" else f"{chosen_type} -> {chosen_cmd}"
+        print(f"[OK] Engine: {label}")
     else:
-        # Interactive mode: show engine selection
-        engines = detect_available_engines()
-        if not engines:
+        # Interactive mode
+        gemini = detect_gemini_cmd()
+
+        # Check NLLB
+        nllb_ok = False
+        try:
+            import importlib.util
+            nllb_ok = importlib.util.find_spec("transformers") is not None
+        except Exception:
+            pass
+
+        if not gemini and not nllb_ok:
             print("[ERROR] No translation engine found.")
-            print("  Install Claude : npm install -g @anthropic-ai/claude-code")
             print("  Install Gemini : npm install -g @google/gemini-cli")
+            print("  Install NLLB   : pip install transformers sentencepiece sacremoses")
             sys.exit(1)
 
         print("\n  Available engines:")
-        engine_list = list(engines.items())
-        for i, (etype, ecmd) in enumerate(engine_list, 1):
-            label = "Claude Code" if etype == "claude" else "Gemini CLI"
-            print(f"   [{i}] {label}")
-            print(f"       {ecmd}")
+        engine_list = []
+        if gemini:
+            engine_list.append(("gemini", gemini))
+            print(f"   [1] Gemini CLI")
+            print(f"       {gemini}")
+        if nllb_ok:
+            engine_list.append(("nllb", ""))
+            print(f"   [{len(engine_list)}] NLLB (offline, local)")
 
         if len(engine_list) == 1:
             print(f"  (only 1 engine available, auto-selected)")
@@ -631,5 +906,5 @@ if __name__ == "__main__":
     print(f"  Original SRT : preserved")
     print()
 
-    result = translate_with_claude(chosen_cmd, srt_path, output_path, chosen_type, target_lang, detected_lang)
+    result = translate_subtitles(chosen_cmd, srt_path, output_path, chosen_type, target_lang, detected_lang)
     sys.exit(result if isinstance(result, int) else (0 if result else 1))
