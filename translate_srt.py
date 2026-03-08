@@ -151,6 +151,147 @@ def estimate_token_cost(blocks):
 
 
 # ---------------------------------------------------------------------------
+# Pre/post processing utilities
+# ---------------------------------------------------------------------------
+def preprocess_subtitle_text(text):
+    """Normalize subtitle text before sending to translation engine."""
+    # Join multi-line subtitle into single line
+    text = re.sub(r'\n+', ' ', text).strip()
+    # Collapse multiple spaces
+    text = re.sub(r' {2,}', ' ', text)
+    return text
+
+
+def preprocess_for_nllb(text, source_lang=""):
+    """Clean subtitle text before NLLB translation."""
+    text = re.sub(r'\n+', ' ', text).strip()
+    text = re.sub(r' {2,}', ' ', text)
+    if source_lang == 'ja':
+        # Collapse highly repetitive Japanese sounds (Whisper transcription artifact)
+        # e.g. "はぁはぁはぁはぁはぁ" → "はぁはぁ..."
+        text = re.sub(r'([ぁ-んァ-ン]{1,3})[、。　\s]*(?:\1[、。　\s]*){3,}', r'\1\1...', text)
+    return text.strip()
+
+
+def postprocess_nllb_output(text):
+    """Fix common NLLB output issues."""
+    # Collapse multiple spaces
+    text = re.sub(r' {2,}', ' ', text).strip()
+    # Fix space before punctuation
+    text = re.sub(r'\s+([.,;!?])', r'\1', text)
+    return text
+
+
+def wrap_translated_line(text, max_chars=42):
+    """Wrap translated text to max_chars per line, max 2 lines.
+    Finds the best split point near the midpoint of the text.
+    """
+    if len(text) <= max_chars:
+        return text
+    # If already has newline, check if it's OK
+    if '\n' in text:
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if all(len(l) <= max_chars for l in lines[:2]):
+            return '\n'.join(lines[:2])
+
+    # Find best split point near midpoint
+    mid = len(text) // 2
+    best_split = -1
+    # Search outward from midpoint for a space
+    for radius in range(mid):
+        left = mid - radius
+        right = mid + radius
+        if left > 0 and text[left] == ' ':
+            best_split = left
+            break
+        if right < len(text) - 1 and text[right] == ' ':
+            best_split = right
+            break
+
+    if best_split > 0:
+        line1 = text[:best_split].strip()
+        line2 = text[best_split:].strip()
+        return line1 + '\n' + line2
+    return text
+
+
+def get_register_note(genre, target_lang):
+    """Return additional prompt note about language register based on genre."""
+    if not genre:
+        return ""
+    genre_lower = genre.lower()
+    casual_keywords = {"drama", "romance", "comedy", "adult", "role", "clinic",
+                       "school", "office", "home", "family", "daily", "slice"}
+    if any(k in genre_lower for k in casual_keywords):
+        if target_lang.lower() == "indonesian":
+            return (
+                "- Use natural casual Indonesian for informal dialogue "
+                "(prefer 'aku/kamu' over 'saya/Anda' when tone is casual)\n"
+            )
+        return "- Use natural casual language appropriate for informal conversation\n"
+    return ""
+
+
+def build_batches(blocks, max_tokens=400, min_tokens_for_break=200):
+    """Build translation batches that prefer to end at sentence boundaries.
+    Breaks at sentence-ending punctuation when past min_tokens_for_break,
+    or at max_tokens regardless.
+    """
+    SENTENCE_END = re.compile(r'[。！？!?]\s*$')
+    batches, cur_batch, cur_tokens = [], [], 0
+
+    for block in blocks:
+        t = max(1, len(block[2]) // 4)
+        cur_batch.append(block)
+        cur_tokens += t
+
+        over_max = cur_tokens >= max_tokens
+        at_sentence = bool(SENTENCE_END.search(block[2]))
+
+        if over_max or (at_sentence and cur_tokens >= min_tokens_for_break):
+            batches.append(cur_batch)
+            cur_batch, cur_tokens = [], 0
+
+    if cur_batch:
+        batches.append(cur_batch)
+    return batches
+
+
+def detect_artifacts(translated_blocks, source_lang=""):
+    """Detect translation quality issues for reporting."""
+    issues = []
+
+    for idx, ts, text in translated_blocks:
+        stripped = text.strip()
+        # Word-break artifacts
+        if stripped.endswith('-'):
+            issues.append(f"[{idx}] word-break at end")
+        if re.match(r'^-[a-zA-Z\u00C0-\u017E]', stripped):
+            issues.append(f"[{idx}] word-break at start")
+
+    # Untranslated source language characters remaining
+    if source_lang == 'ja':
+        ja_pat = re.compile(r'[\u3040-\u30ff]')
+        for idx, ts, text in translated_blocks:
+            if ja_pat.search(text):
+                issues.append(f"[{idx}] untranslated Japanese chars")
+    elif source_lang == 'ko':
+        ko_pat = re.compile(r'[\uac00-\ud7a3]')
+        for idx, ts, text in translated_blocks:
+            if ko_pat.search(text):
+                issues.append(f"[{idx}] untranslated Korean chars")
+
+    # Lines too long for subtitle display
+    for idx, ts, text in translated_blocks:
+        for line in text.split('\n'):
+            if len(line) > 60:
+                issues.append(f"[{idx}] long line ({len(line)} chars)")
+                break
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
 # Gemini helpers
 # ---------------------------------------------------------------------------
 def check_engine_responsive(engine_cmd, engine_type):
@@ -247,17 +388,17 @@ def translate_with_nllb(blocks, source_lang, target_lang_name, script_dir=None):
     target_code = TARGET_LANG_TO_CODE.get(target_lang_name.lower(), "")
     if not target_code:
         print(f"  [NLLB] Unknown target language: {target_lang_name}")
-        return {}
+        return {}, {}
 
     src_nllb = NLLB_LANG_MAP.get(source_lang, "")
     tgt_nllb = NLLB_LANG_MAP.get(target_code, "")
 
     if not src_nllb:
         print(f"  [NLLB] No NLLB mapping for source: {source_lang}")
-        return {}
+        return {}, {}
     if not tgt_nllb:
         print(f"  [NLLB] No NLLB mapping for target: {target_lang_name}")
-        return {}
+        return {}, {}
 
     from transformers import pipeline as hf_pipeline  # raises ImportError if missing
 
@@ -303,14 +444,19 @@ def translate_with_nllb(blocks, source_lang, target_lang_name, script_dir=None):
     fallback = {}  # repetitive results — used if Gemini retry also fails
     for idx, ts, text in blocks:
         try:
+            # Pre-process before NLLB
+            clean_text = preprocess_for_nllb(text, source_lang)
+            if not clean_text:
+                continue
             out = translator(
-                text,
+                clean_text,
                 max_length=512,
                 no_repeat_ngram_size=3,
                 repetition_penalty=1.2,
             )
             if out:
                 translated = out[0].get("translation_text", "").strip()
+                translated = postprocess_nllb_output(translated)
                 if translated and not _has_repetition(translated):
                     results[idx] = translated
                 elif translated:
@@ -353,7 +499,9 @@ def _translate_nllb_only(srt_path, output_path, target_lang, source_lang, script
 
     translated_blocks = []
     for idx, ts, text in blocks:
-        translated_blocks.append((idx, ts, results.get(idx, text)))
+        trans = results.get(idx, text)
+        trans = wrap_translated_line(trans)
+        translated_blocks.append((idx, ts, trans))
 
     with open(output_path, "w", encoding="utf-8") as f:
         for idx, ts, text in translated_blocks:
@@ -370,6 +518,11 @@ def _translate_nllb_only(srt_path, output_path, target_lang, source_lang, script
             preview = trans[2][:70] + ("..." if len(trans[2]) > 70 else "")
             print(f"    [{trans[0]}] {preview}")
             shown += 1
+
+    # Artifact report
+    issues = detect_artifacts(translated_blocks, source_lang)
+    if issues:
+        print(f"  [Warn] {len(issues)} issue(s): " + " | ".join(issues[:5]))
 
     print(f"  [DONE] {translated_count}/{total} segments translated")
     print(f"  Saved  : {output_path}")
@@ -444,27 +597,16 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
     print(f"  [OK] Gemini responsive ({msg[:50]})")
     print(f"  Translating in batches...")
 
-    MAX_TOKENS_PER_BATCH = 150
+    MAX_TOKENS_PER_BATCH = 400   # increased from 150 for better context
     GEMINI_BATCH_DELAY   = 5
     MAX_RETRY            = 2
+    CONTEXT_WINDOW       = 3     # recent translated lines passed as context
 
     def est_tok(text):
         return max(1, len(text) // 4)
 
-    batches = []
-    cur_batch = []
-    cur_tokens = 0
-    for block in blocks:
-        t = est_tok(block[2])
-        if cur_tokens + t > MAX_TOKENS_PER_BATCH and cur_batch:
-            batches.append(cur_batch)
-            cur_batch = [block]
-            cur_tokens = t
-        else:
-            cur_batch.append(block)
-            cur_tokens += t
-    if cur_batch:
-        batches.append(cur_batch)
+    # Build batches with sentence-boundary awareness
+    batches = build_batches(blocks, max_tokens=MAX_TOKENS_PER_BATCH)
 
     total_batch = len(batches)
     print(f"  Total batches  : {total_batch} (max ~{MAX_TOKENS_PER_BATCH} tokens/batch)")
@@ -472,14 +614,16 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
 
     translated_blocks = []
     source_map = {}  # idx -> engine that provided translation
+    recent_context = []  # last CONTEXT_WINDOW translated (idx, translated_text) pairs
 
     LANG_NAMES = {
         "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
         "en": "English",  "id": "Indonesian",
     }
-    src_label  = LANG_NAMES.get(source_lang, "") if source_lang else ""
+    src_label   = LANG_NAMES.get(source_lang, "") if source_lang else ""
     from_clause = f" from {src_label}" if src_label else ""
     genre_line  = f"Content type: {genre}\n" if genre else ""
+    register_note = get_register_note(genre, target_lang)
 
     for batch_num, batch in enumerate(batches, 1):
         batch_tokens = sum(est_tok(t) for _, _, t in batch)
@@ -497,7 +641,11 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
             if matched > 0:
                 print(f"  Batch {batch_num}/{total_batch} - resumed from cache ({matched}/{len(batch)} match)")
                 for idx, ts, text in batch:
-                    translated_blocks.append((idx, ts, translated_lines.get(idx, text)))
+                    trans = translated_lines.get(idx, text)
+                    translated_blocks.append((idx, ts, trans))
+                    if idx in translated_lines:
+                        recent_context.append((idx, trans))
+                recent_context = recent_context[-CONTEXT_WINDOW:]
                 continue
             else:
                 print(f"  Batch {batch_num}/{total_batch} - cache invalid, reprocessing")
@@ -508,7 +656,22 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
 
         print(f"  Batch {batch_num}/{total_batch} ({len(batch)} seg, ~{batch_tokens} tok)...", end="", flush=True)
 
-        lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in batch]
+        # Pre-process text before sending to Gemini
+        lines_to_translate = [
+            f"[{idx}] {preprocess_subtitle_text(text)}"
+            for idx, ts, text in batch
+        ]
+
+        # Build context section from recent translated lines
+        context_section = ""
+        if recent_context:
+            ctx_lines = "\n".join(f"[{idx}] {text}" for idx, text in recent_context)
+            context_section = (
+                f"Recent dialogue (already translated — for context only, do NOT retranslate):\n"
+                f"{ctx_lines}\n\n"
+                f"Now translate ONLY these lines:\n"
+            )
+
         prompt = (
             f"You are a professional subtitle translator.\n"
             f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
@@ -519,8 +682,13 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
             "- Adapt idioms and cultural expressions naturally — avoid word-for-word literal translation\n"
             "- Use vocabulary and phrasing appropriate to the content type above\n"
             "- Keep translations concise so they are easy to read quickly as subtitles\n"
+            f"{register_note}"
+            "- Non-verbal sounds (sighs, moans, gasps like 'ああ', 'はぁ') should be adapted "
+            "as natural target-language expressions (e.g. 'haah', 'aah') — do not skip them\n"
+            "- Some lines may be short fragments or continuations — translate them as short natural phrases\n"
             "- Keep the [number] prefix on each line exactly as-is\n"
             "- Output ONLY the translated lines, no comments or explanations\n\n"
+            + context_section
             + "\n".join(lines_to_translate)
         )
 
@@ -566,7 +734,11 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                 print(f"      [!] 0 matches - cache not saved, will retry next run")
 
             for idx, ts, text in batch:
-                translated_blocks.append((idx, ts, translated_lines.get(idx, text)))
+                trans = translated_lines.get(idx, text)
+                translated_blocks.append((idx, ts, trans))
+                if idx in translated_lines:
+                    recent_context.append((idx, trans))
+            recent_context = recent_context[-CONTEXT_WINDOW:]
 
         except FileNotFoundError as e:
             print(f" ERROR")
@@ -606,18 +778,7 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
             still_missing = [b for b in untranslated if b[0] not in nllb_results]
             if still_missing and engine_cmd:
                 print(f"  [Gemini] {len(still_missing)} NLLB-missed segment(s) — retrying with Gemini...")
-                miss_batches = []
-                cur_b, cur_t = [], 0
-                for block in still_missing:
-                    t = est_tok(block[2])
-                    if cur_t + t > MAX_TOKENS_PER_BATCH and cur_b:
-                        miss_batches.append(cur_b)
-                        cur_b, cur_t = [block], t
-                    else:
-                        cur_b.append(block)
-                        cur_t += t
-                if cur_b:
-                    miss_batches.append(cur_b)
+                miss_batches = build_batches(still_missing, max_tokens=MAX_TOKENS_PER_BATCH)
 
                 trans_map = {idx: txt for idx, ts, txt in translated_blocks}
                 for mb_num, mb in enumerate(miss_batches, 1):
@@ -643,7 +804,10 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                     time.sleep(GEMINI_BATCH_DELAY)
                     print(f"  Gemini {mb_num}/{len(miss_batches)} ({len(mb)} seg, ~{mb_tokens} tok)...", end="", flush=True)
 
-                    lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in mb]
+                    lines_to_translate = [
+                        f"[{idx}] {preprocess_subtitle_text(text)}"
+                        for idx, ts, text in mb
+                    ]
                     miss_prompt = (
                         f"You are a professional subtitle translator.\n"
                         f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
@@ -654,6 +818,10 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                         "- Adapt idioms and cultural expressions naturally — avoid word-for-word literal translation\n"
                         "- Use vocabulary and phrasing appropriate to the content type above\n"
                         "- Keep translations concise so they are easy to read quickly as subtitles\n"
+                        f"{register_note}"
+                        "- Non-verbal sounds (sighs, moans, gasps like 'ああ', 'はぁ') should be adapted "
+                        "as natural target-language expressions — do not skip them\n"
+                        "- Some lines may be short fragments — translate them as short natural phrases\n"
                         "- Keep the [number] prefix on each line exactly as-is\n"
                         "- Output ONLY the translated lines, no comments or explanations\n\n"
                         + "\n".join(lines_to_translate)
@@ -707,18 +875,7 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
         except ImportError:
             # NLLB not installed — fall back to Gemini retry (original second pass)
             print(f"  [!] NLLB not installed — retrying remaining with Gemini...")
-            retry_batches = []
-            cur_b, cur_t = [], 0
-            for block in untranslated:
-                t = est_tok(block[2])
-                if cur_t + t > MAX_TOKENS_PER_BATCH and cur_b:
-                    retry_batches.append(cur_b)
-                    cur_b, cur_t = [block], t
-                else:
-                    cur_b.append(block)
-                    cur_t += t
-            if cur_b:
-                retry_batches.append(cur_b)
+            retry_batches = build_batches(untranslated, max_tokens=MAX_TOKENS_PER_BATCH)
 
             trans_map = {idx: txt for idx, ts, txt in translated_blocks}
 
@@ -745,7 +902,10 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                 time.sleep(GEMINI_BATCH_DELAY)
                 print(f"  Retry {rb_num}/{len(retry_batches)} ({len(rb)} seg, ~{rb_tokens} tok)...", end="", flush=True)
 
-                lines_to_translate = [f"[{idx}] {text}" for idx, ts, text in rb]
+                lines_to_translate = [
+                    f"[{idx}] {preprocess_subtitle_text(text)}"
+                    for idx, ts, text in rb
+                ]
                 retry_prompt = (
                     f"You are a professional subtitle translator.\n"
                     f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
@@ -756,6 +916,9 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                     "- Adapt idioms and cultural expressions naturally — avoid word-for-word literal translation\n"
                     "- Use vocabulary and phrasing appropriate to the content type above\n"
                     "- Keep translations concise so they are easy to read quickly as subtitles\n"
+                    f"{register_note}"
+                    "- Non-verbal sounds should be adapted as natural target-language expressions\n"
+                    "- Some lines may be short fragments — translate them as short natural phrases\n"
                     "- Keep the [number] prefix on each line exactly as-is\n"
                     "- Output ONLY the translated lines, no comments or explanations\n\n"
                     + "\n".join(lines_to_translate)
@@ -800,14 +963,18 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
             print(f"  [NLLB] Error: {e}")
 
     # -----------------------------------------------------------------------
-    # Write output file
+    # Apply output line wrapping and write output file
     # -----------------------------------------------------------------------
+    final_blocks = []
+    for idx, ts, text in translated_blocks:
+        final_blocks.append((idx, ts, wrap_translated_line(text)))
+
     with open(output_path, "w", encoding="utf-8") as f:
-        for idx, ts, text in translated_blocks:
+        for idx, ts, text in final_blocks:
             f.write(f"{idx}\n{ts}\n{text}\n\n")
 
     translated_count = sum(
-        1 for orig, trans in zip(blocks, translated_blocks)
+        1 for orig, trans in zip(blocks, final_blocks)
         if orig[2] != trans[2]
     )
 
@@ -839,9 +1006,16 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
     if parts:
         print(f"  [Report] " + "  |  ".join(parts))
 
+    # Artifact detection
+    issues = detect_artifacts(final_blocks, source_lang)
+    if issues:
+        print(f"  [Warn] {len(issues)} issue(s) detected: " + " | ".join(issues[:5]))
+        if len(issues) > 5:
+            print(f"         ...and {len(issues) - 5} more")
+
     # Preview first 5 translated segments
     shown = 0
-    for orig, trans in zip(blocks, translated_blocks):
+    for orig, trans in zip(blocks, final_blocks):
         if orig[2] != trans[2] and shown < 5:
             if shown == 0:
                 print(f"\n  [Preview]")
