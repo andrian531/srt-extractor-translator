@@ -142,7 +142,7 @@ if "!ENGINE_INPUT!"=="" set "ENGINE_INPUT=!ENG_DEFAULT!"
 
 if "!ENGINE_INPUT!"=="2" (
     set "INSTALL_ENGINE=whisper"
-    echo  Selected: Whisper (standard)
+    echo  Selected: Whisper ^(standard^)
 ) else (
     set "INSTALL_ENGINE=whisperx"
     echo  Selected: WhisperX
