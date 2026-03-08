@@ -1,18 +1,20 @@
 # Whisper Subtitle Tools
 
-Extract subtitles from any video file using OpenAI Whisper (local, offline), then translate them to any language using Gemini CLI or Claude Code — all from a simple menu-driven interface.
+Extract subtitles from any video file using OpenAI Whisper or WhisperX (local, offline), then translate them to any language using Gemini CLI or NLLB (offline) — all from a simple menu-driven interface.
 
 ## Features
 
-- **Generate subtitles** from video files using Whisper (runs fully offline, on your machine)
-- **Translate SRT files** to any language via AI (Gemini CLI or Claude Code)
+- **Generate subtitles** from video files using Whisper or WhisperX (runs fully offline, on your machine)
+- **Translate SRT files** to any language — Gemini CLI (primary) with NLLB as offline gap-fill and fallback
 - **Generate + Translate** in one go — set language and target upfront, walk away
 - Auto-detects source language of SRT files
 - Smart target language menu — never offers translation to the same language as source
 - AI detects content genre/type before translating for more natural, context-aware results
-- GPU auto-detection with model recommendation based on your VRAM
+- GPU auto-detection with model recommendation based on your VRAM (NVIDIA CUDA, AMD ROCm, Apple Silicon MPS)
 - Batch-based translation with resume support — safe to interrupt and continue
-- Gemini first, Claude as automatic fallback
+- Gemini primary, NLLB offline fallback — translation works even without internet
+- Anti-repetition measures for NLLB output with Gemini retry for edge cases
+- Menu stays open after completion or error — return to menu or quit
 - Supports: English, Indonesian, Japanese, Korean, Chinese, and any other language
 
 ## Requirements
@@ -23,7 +25,7 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
 |-----------|---------|-------------|
 | OS | Windows 10 | Windows 11 |
 | RAM | 8 GB | 16 GB |
-| GPU | — (CPU works) | NVIDIA GPU with CUDA |
+| GPU | — (CPU works) | NVIDIA (CUDA), AMD (ROCm), or Apple Silicon (MPS) |
 | VRAM | — | 6 GB+ |
 
 **GPU / VRAM guide for model selection:**
@@ -50,8 +52,12 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
 
 | Engine | Install | Cost | Notes |
 |--------|---------|------|-------|
-| **Gemini CLI** | `npm install -g @google/gemini-cli` | Free tier available | Recommended, more permissive |
-| **Claude Code** | `npm install -g @anthropic-ai/claude-code` | Paid | Fallback engine |
+| **Gemini CLI** | `npm install -g @google/gemini-cli` | Free tier available | Primary engine, recommended |
+| **NLLB (offline)** | `pip install transformers sentencepiece sacremoses` | Free | Offline fallback, no internet needed |
+
+Translation priority: **Gemini** → **NLLB** (fills missed segments) → **Gemini retry** (if NLLB output is repetitive) → NLLB result as last resort.
+
+If Gemini is not installed, translation runs fully offline via NLLB. NLLB requires ~1.3 GB model download on first use (cached locally after that).
 
 > Subtitle generation works without any AI engine. Translation requires at least one.
 
@@ -67,7 +73,7 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
    - Check for Gemini CLI and Claude Code
    - Offer to pre-download a Whisper model based on your GPU
 
-3. **Done.** Run `whisper-subtitle.bat` to start.
+3. **Done.** Run `whisper-subtitle.bat` (OpenAI Whisper) or `whisperx-subtitle.bat` (WhisperX, faster with word-level timestamps) to start.
 
 > If ffmpeg auto-install fails, download it manually from [gyan.dev/ffmpeg](https://www.gyan.dev/ffmpeg/builds/) and add the `bin` folder to your system PATH.
 
@@ -94,7 +100,7 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
 1. Select an existing `.srt` file (or all files)
 2. Source language is auto-detected from the file content
 3. Choose target language — source language is excluded from the list
-4. Translation runs via Gemini (primary) → Claude (fallback if Gemini fails)
+4. Translation runs via Gemini (primary) → NLLB offline (gap-fill and fallback)
 
 ### Menu [3] — Generate + Translate (Set & Forget)
 
@@ -123,8 +129,10 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
 - **Slow download from Hugging Face?** Disable Cloudflare or any firewall/VPN while downloading Whisper models — they throttle Hugging Face traffic.
 - **Japanese video?** Select "Japanese" explicitly as source language instead of Auto-detect for better accuracy, especially for mixed-language content.
 - **Translation interrupted?** Just run it again — progress is cached in a `_tmp/` folder next to the SRT file and will resume from where it stopped.
-- **Gemini vs Claude:** Gemini is the default engine and handles a wider range of content. Claude is used as a fallback if Gemini fails or is unavailable.
+- **NLLB first run:** The NLLB model (~1.3 GB) downloads automatically from Hugging Face on first use and is cached locally — only happens once.
+- **Gemini vs NLLB:** Gemini is the default engine and produces more natural translations. NLLB is offline-capable and serves as an automatic gap-fill and fallback.
 - **CPU mode:** Works, but expect 5–10x slower transcription compared to GPU. Use `medium` or `small` model for reasonable speed.
+- **Apple Silicon (Mac)?** Whisper uses MPS (GPU acceleration). WhisperX falls back to CPU — CTranslate2 does not support MPS.
 
 ## Tested On
 
@@ -136,10 +144,11 @@ Extract subtitles from any video file using OpenAI Whisper (local, offline), the
 ## Project Structure
 
 ```
-whisper-subtitle.bat   — main menu (generate + translate)
-install.bat            — one-time setup wizard
-translate_srt.py       — translation engine (Gemini / Claude)
-check_gpu.py           — GPU detection and PyTorch verification
+whisper-subtitle.bat    — main menu using OpenAI Whisper
+whisperx-subtitle.bat   — main menu using WhisperX (faster, word-level timestamps)
+install.bat             — one-time setup wizard
+translate_srt.py        — translation engine (Gemini primary, NLLB offline fallback)
+check_gpu.py            — GPU detection and PyTorch verification
 ```
 
 ## License
