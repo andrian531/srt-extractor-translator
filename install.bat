@@ -596,6 +596,7 @@ if exist "%SCRIPT_DIR%\.ollama" (
 :: Check which models are already pulled
 set "OLL_ST_1=  " & set "OLL_ST_2=  " & set "OLL_ST_3=  "
 set "OLL_ST_4=  " & set "OLL_ST_5=  " & set "OLL_ST_6=  "
+set "OLL_ST_7=  " & set "OLL_ST_8=  " & set "OLL_ST_9=  "
 
 for /f "skip=1 tokens=1" %%M in ('ollama list 2^>nul') do (
     if "%%M"=="qwen2.5:1.5b"     set "OLL_ST_1=[pulled]"
@@ -604,6 +605,9 @@ for /f "skip=1 tokens=1" %%M in ('ollama list 2^>nul') do (
     if "%%M"=="deepseek-r1:1.5b" set "OLL_ST_4=[pulled]"
     if "%%M"=="deepseek-r1:7b"   set "OLL_ST_5=[pulled]"
     if "%%M"=="mistral:7b"       set "OLL_ST_6=[pulled]"
+    if "%%M"=="gemma2:9b"        set "OLL_ST_7=[pulled]"
+    if "%%M"=="llama3.1:8b"      set "OLL_ST_8=[pulled]"
+    if "%%M"=="phi3:mini"        set "OLL_ST_9=[pulled]"
 )
 
 :OLLAMA_MODEL_LOOP
@@ -618,6 +622,9 @@ echo   [3] qwen2.5:7b         ~4.7GB  ~6 GB     Slow   Medium   !OLL_ST_3!
 echo   [4] deepseek-r1:1.5b   ~1.1GB  ~2 GB     OK     Low      !OLL_ST_4!
 echo   [5] deepseek-r1:7b     ~4.7GB  ~6 GB     Slow   Low      !OLL_ST_5!
 echo   [6] mistral:7b         ~4.1GB  ~5 GB     Slow   Low      !OLL_ST_6!
+echo   [7] gemma2:9b          ~5.4GB  ~8 GB     Slow   Medium   !OLL_ST_7!
+echo   [8] llama3.1:8b        ~4.9GB  ~6 GB     Slow   Medium   !OLL_ST_8!
+echo   [9] phi3:mini          ~2.3GB  ~4 GB     OK     Medium   !OLL_ST_9!
 echo  ---------------------------------------------------------------------------
 echo   [S] Skip / Done
 echo  ---------------------------------------------------------------------------
@@ -632,15 +639,15 @@ echo  Recommendation by VRAM:
 echo   ^< 4 GB VRAM  : [4] deepseek-r1:1.5b  ^(Low sensor, lightweight^)
 echo   4 - 6 GB     : [4] deepseek-r1:1.5b  ^(Low sensor^)
 echo   6 - 12 GB    : [5] deepseek-r1:7b     ^(Low sensor, best quality^)
-echo   12 GB+       : [5] deepseek-r1:7b  or  [6] mistral:7b
-echo   No GPU ^(CPU^) : [1] qwen2.5:1.5b  or  [4] deepseek-r1:1.5b
+echo   12 GB+       : [5] deepseek-r1:7b  or  [7] gemma2:9b  or  [8] llama3.1:8b
+echo   No GPU ^(CPU^) : [1] qwen2.5:1.5b  or  [4] deepseek-r1:1.5b  or  [9] phi3:mini
 echo.
 if not "!CURRENT_OLLAMA_MODEL!"=="none" (
     echo  Current selection: !CURRENT_OLLAMA_MODEL! ^(press Enter to keep^)
     echo.
 )
 
-set /p OLLAMA_CHOICE="Choose model to download and use [1-6 / S, default=S]: "
+set /p OLLAMA_CHOICE="Choose model to download and use [1-9 / S, default=S]: "
 if "!OLLAMA_CHOICE!"=="" (
     if not "!CURRENT_OLLAMA_MODEL!"=="none" (
         echo  [INFO] Keeping current model: !CURRENT_OLLAMA_MODEL!
@@ -656,6 +663,9 @@ if "!OLLAMA_CHOICE!"=="3" set "OLLAMA_MODEL=qwen2.5:7b"
 if "!OLLAMA_CHOICE!"=="4" set "OLLAMA_MODEL=deepseek-r1:1.5b"
 if "!OLLAMA_CHOICE!"=="5" set "OLLAMA_MODEL=deepseek-r1:7b"
 if "!OLLAMA_CHOICE!"=="6" set "OLLAMA_MODEL=mistral:7b"
+if "!OLLAMA_CHOICE!"=="7" set "OLLAMA_MODEL=gemma2:9b"
+if "!OLLAMA_CHOICE!"=="8" set "OLLAMA_MODEL=llama3.1:8b"
+if "!OLLAMA_CHOICE!"=="9" set "OLLAMA_MODEL=phi3:mini"
 
 if "!OLLAMA_MODEL!"=="" goto OLLAMA_MODEL_LOOP
 

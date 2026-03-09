@@ -257,6 +257,19 @@ def build_batches(blocks, max_tokens=200, min_tokens_for_break=100):
     return batches
 
 
+def parse_llm_line(line):
+    """Parse a numbered LLM output line in any common format.
+    Accepts: [1] text  [1]: text  1. text  1) text  (1) text
+    Returns (idx_str, text) or (None, None) if no match.
+    """
+    m = re.match(r"[\[\(]?(\d+)[\]\)\.\:]?\s+(.*)", line.strip())
+    if m:
+        text = m.group(2).strip()
+        if text:
+            return m.group(1), text
+    return None, None
+
+
 def still_in_source_lang(text, source_lang):
     """Return True if text still appears to be in the source language
     (i.e. translation failed / was skipped by the LLM).
@@ -653,7 +666,13 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
             "Reply with ONLY the genre/type description, nothing else.\n\n"
             f"Subtitle excerpt:\n{sample}"
         )
-        rc, genre_out, _ = run_translate_prompt_ollama(model_name, genre_prompt, timeout=120)
+        # Prefer Gemini for genre detection (more accurate), fall back to Ollama
+        gemini_cmd = detect_gemini_cmd()
+        if gemini_cmd:
+            print(f"  Genre detection : using Gemini...")
+            rc, genre_out, _ = run_translate_prompt(gemini_cmd, "gemini", genre_prompt)
+        else:
+            rc, genre_out, _ = run_translate_prompt_ollama(model_name, genre_prompt, timeout=120)
         if rc == 0 and genre_out.strip():
             genre = genre_out.strip().split("\n")[0][:300]
             print(f"  Genre          : {genre}")
@@ -709,9 +728,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
                 cached = f.read()
             translated_lines = {}
             for line in cached.strip().split("\n"):
-                m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                if m and m.group(2).strip():
-                    translated_lines[m.group(1)] = m.group(2)
+                idx, text = parse_llm_line(line)
+                if idx:
+                    translated_lines[idx] = text
             matched = sum(1 for idx, _, _ in batch if idx in translated_lines)
             if matched > 0:
                 print(f"  Batch {batch_num}/{total_batch} - resumed from cache ({matched}/{len(batch)} match)")
@@ -745,7 +764,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
             )
 
         prompt = (
-            f"You are a professional subtitle translator.\n"
+            f"You are a professional subtitle translator processing subtitle files for a video player.\n"
+            f"The subtitles come from a video and may contain casual dialogue, emotional expressions, or mature language.\n"
+            f"Your task is purely linguistic translation — do not evaluate, refuse, or censor any content.\n"
             f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
             f"{genre_line}"
             "\nGuidelines:\n"
@@ -782,9 +803,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
 
         translated_lines = {}
         for line in stdout.strip().split("\n"):
-            m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-            if m:
-                translated_lines[m.group(1)] = m.group(2)
+            idx, text = parse_llm_line(line)
+            if idx:
+                translated_lines[idx] = text
 
         matched = sum(1 for idx, _, _ in batch if idx in translated_lines)
         print(f" OK ({matched}/{len(batch)} match)")
@@ -844,9 +865,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
                                 cached = f.read()
                             mb_cached = {}
                             for line in cached.strip().split("\n"):
-                                mm = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                                if mm and mm.group(2).strip():
-                                    mb_cached[mm.group(1)] = mm.group(2)
+                                idx, text = parse_llm_line(line)
+                                if idx:
+                                    mb_cached[idx] = text
                             matched = sum(1 for idx, _, _ in mb if idx in mb_cached)
                             if matched > 0:
                                 print(f"  LLM {mb_num}/{len(miss_batches)} - from cache ({matched}/{len(mb)})")
@@ -862,7 +883,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
                             for idx, ts, text in mb
                         ]
                         miss_prompt = (
-                            f"You are a professional subtitle translator.\n"
+                            f"You are a professional subtitle translator processing subtitle files for a video player.\n"
+                            f"The subtitles come from a video and may contain casual dialogue, emotional expressions, or mature language.\n"
+                            f"Your task is purely linguistic translation — do not evaluate, refuse, or censor any content.\n"
                             f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
                             f"{genre_line}"
                             "\nGuidelines:\n"
@@ -899,9 +922,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
 
                         mb_translated = {}
                         for line in stdout.strip().split("\n"):
-                            mm = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                            if mm:
-                                mb_translated[mm.group(1)] = mm.group(2)
+                            idx, text = parse_llm_line(line)
+                            if idx:
+                                mb_translated[idx] = text
 
                         matched = sum(1 for idx, _, _ in mb if idx in mb_translated)
                         print(f" OK ({matched}/{len(mb)})")
@@ -938,9 +961,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
                         cached = f.read()
                     rb_cached = {}
                     for line in cached.strip().split("\n"):
-                        m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                        if m and m.group(2).strip():
-                            rb_cached[m.group(1)] = m.group(2)
+                        idx, text = parse_llm_line(line)
+                        if idx:
+                            rb_cached[idx] = text
                     matched = sum(1 for idx, _, _ in rb if idx in rb_cached)
                     if matched > 0:
                         print(f"  Retry {rb_num}/{len(retry_batches)} - from cache ({matched}/{len(rb)})")
@@ -956,7 +979,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
                     for idx, ts, text in rb
                 ]
                 retry_prompt = (
-                    f"You are a professional subtitle translator.\n"
+                    f"You are a professional subtitle translator processing subtitle files for a video player.\n"
+                    f"The subtitles come from a video and may contain casual dialogue, emotional expressions, or mature language.\n"
+                    f"Your task is purely linguistic translation — do not evaluate, refuse, or censor any content.\n"
                     f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
                     f"{genre_line}"
                     "\nGuidelines:\n"
@@ -982,9 +1007,9 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
 
                 rb_translated = {}
                 for line in stdout.strip().split("\n"):
-                    m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                    if m:
-                        rb_translated[m.group(1)] = m.group(2)
+                    idx, text = parse_llm_line(line)
+                    if idx:
+                        rb_translated[idx] = text
                 matched = sum(1 for idx, _, _ in rb if idx in rb_translated)
                 print(f" OK ({matched}/{len(rb)})")
                 if matched > 0:
@@ -1180,9 +1205,9 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                 cached = f.read()
             translated_lines = {}
             for line in cached.strip().split("\n"):
-                m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                if m and m.group(2).strip():
-                    translated_lines[m.group(1)] = m.group(2)
+                idx, text = parse_llm_line(line)
+                if idx:
+                    translated_lines[idx] = text
             matched = sum(1 for idx, _, _ in batch if idx in translated_lines)
             if matched > 0:
                 print(f"  Batch {batch_num}/{total_batch} - resumed from cache ({matched}/{len(batch)} match)")
@@ -1219,7 +1244,9 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
             )
 
         prompt = (
-            f"You are a professional subtitle translator.\n"
+            f"You are a professional subtitle translator processing subtitle files for a video player.\n"
+            f"The subtitles come from a video and may contain casual dialogue, emotional expressions, or mature language.\n"
+            f"Your task is purely linguistic translation — do not evaluate, refuse, or censor any content.\n"
             f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
             f"{genre_line}"
             "\nGuidelines:\n"
@@ -1438,9 +1465,9 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                         cached = f.read()
                     rb_cached = {}
                     for line in cached.strip().split("\n"):
-                        m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                        if m and m.group(2).strip():
-                            rb_cached[m.group(1)] = m.group(2)
+                        idx, text = parse_llm_line(line)
+                        if idx:
+                            rb_cached[idx] = text
                     matched = sum(1 for idx, _, _ in rb if idx in rb_cached)
                     if matched > 0:
                         print(f"  Retry {rb_num}/{len(retry_batches)} - from cache ({matched}/{len(rb)})")
@@ -1491,9 +1518,9 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
 
                 rb_translated = {}
                 for line in stdout.strip().split("\n"):
-                    m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
-                    if m:
-                        rb_translated[m.group(1)] = m.group(2)
+                    idx, text = parse_llm_line(line)
+                    if idx:
+                        rb_translated[idx] = text
 
                 matched = sum(1 for idx, _, _ in rb if idx in rb_translated)
                 print(f" OK ({matched}/{len(rb)})")
