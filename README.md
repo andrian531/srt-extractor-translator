@@ -97,10 +97,12 @@ If Gemini is not installed, translation runs fully offline via NLLB. NLLB requir
 >
 > Do not move just the `.bat` file alone — it requires `translate_srt.py` and `check_gpu.py` to be in the same directory.
 
+> **File selection tip:** All menus that ask for a file number also accept comma-separated numbers (e.g. `1,3` or `2,4,5`) to process multiple specific files, or type `all` to process everything.
+
 ### Menu [1] — Generate Subtitle
 
-1. Select a video file (or all files)
-2. Choose a Whisper model
+1. Select a video file (single, comma-separated, or all)
+2. Choose a Whisper model — shows download status (`[downloaded]`) for each
 3. Choose the source language (or Auto-detect)
 4. Choose output format (srt / vtt / txt / all)
 5. Confirm — Whisper runs locally on your machine
@@ -108,25 +110,25 @@ If Gemini is not installed, translation runs fully offline via NLLB. NLLB requir
 
 ### Menu [2] — Translate Subtitle
 
-1. Select an existing `.srt` file (or all files)
+1. Select an existing `.srt` file (single, comma-separated, or all)
 2. Source language is auto-detected from the file content
 3. Choose target language — source language is excluded from the list
 4. Translation runs via Gemini (primary) → NLLB offline (gap-fill and fallback)
 
 ### Menu [3] — Generate + Translate (Set & Forget)
 
-1. Select a video file (or all files)
+1. Select a video file (single, comma-separated, or all)
 2. Choose a Whisper model
 3. Choose the source language (or Auto-detect)
 4. Choose output format
 5. Choose target language — asked upfront before processing starts
 6. Confirm — Whisper runs, then translation starts automatically with no further prompts
 
-> Use this when you want to walk away and come back to find everything done.
+> Use this when you want to walk away and come back to find everything done. The **translated subtitle becomes the primary file** (`video.srt`) so media players load it automatically. The original is saved as `video_JA.srt` / `video_EN.srt` etc.
 
 ### Menu [4] — Cleanup SRT
 
-1. Select an existing `.srt` file (or all files)
+1. Select an existing `.srt` file (single or all)
 2. Script fixes overlapping timestamps and merges segments shorter than 1.2 seconds with fewer than 15 characters into the next segment
 3. Output saved as `filename_clean.srt` — original file is not modified
 
@@ -134,7 +136,7 @@ If Gemini is not installed, translation runs fully offline via NLLB. NLLB requir
 
 ### Menu [5] — Translate Offline (NLLB only)
 
-1. Select an existing `.srt` file (or all files)
+1. Select an existing `.srt` file (single, comma-separated, or all)
 2. Source language is auto-detected from the file content
 3. Choose target language
 4. Translation runs entirely via NLLB — no Gemini, no internet required
@@ -143,42 +145,51 @@ If Gemini is not installed, translation runs fully offline via NLLB. NLLB requir
 
 ### Menu [6] — Generate + Translate Offline (Set & Forget)
 
-1. Select a video file (or all files)
+1. Select a video file (single, comma-separated, or all)
 2. Choose a Whisper model
 3. Choose the source language (or Auto-detect)
 4. Choose output format
 5. Choose target language — asked upfront before processing starts
 6. Confirm — Whisper runs, then NLLB translation starts automatically
 
-> Fully offline from start to finish. No Gemini needed. Ideal for air-gapped environments or when internet is unavailable.
+> Fully offline from start to finish. No Gemini needed. Translated subtitle becomes the primary file — see Menu [3] note above.
 
 ### Menu [7] — Translate Offline LLM+NLLB
 
-1. Select an existing `.srt` file (or all files)
-2. Source language is auto-detected from the file content
-3. Choose target language
-4. Select an Ollama model from your installed models
+1. Select an Ollama model from your installed models (shown at menu entry; auto-selected if only one)
+2. Select an existing `.srt` file (single, comma-separated, or all)
+3. Source language is auto-detected from the file content
+4. Choose target language
 5. Translation runs via local LLM (primary) → NLLB (gap-fill for any segments the LLM missed)
 
 > Requires [Ollama](https://ollama.com) to be installed and running (`ollama serve`). See [Offline LLM Setup](#offline-llm-ollama-setup) below.
 
 ### Menu [8] — Generate + Translate Offline LLM+NLLB (Set & Forget)
 
-1. Select a video file (or all files)
-2. Choose a Whisper model
-3. Choose the source language (or Auto-detect)
-4. Choose output format
-5. Choose target language — asked upfront before processing starts
-6. Select an Ollama model
+1. Select an Ollama model from your installed models (auto-selected if only one)
+2. Select a video file (single, comma-separated, or all)
+3. Choose a Whisper model
+4. Choose the source language (or Auto-detect)
+5. Choose output format
+6. Choose target language — asked upfront before processing starts
 7. Confirm — Whisper runs, then LLM+NLLB translation starts automatically
 
-> Fully offline from start to finish. No Gemini or internet needed. Ideal for private content or air-gapped setups.
+> Fully offline from start to finish. No Gemini or internet needed. Translated subtitle becomes the primary file — see Menu [3] note above.
 
 ### Output Files
 
+**Generate + Translate menus [3][6][8]** — translated subtitle becomes the primary file:
+
 | File | Description |
 |------|-------------|
-| `video.srt` | Original subtitle from Whisper |
+| `video.srt` | **Translated subtitle (primary)** — loaded automatically by media players |
+| `video_JA.srt` | Original Whisper subtitle (Japanese source example) |
+
+**Translate-only menus [2][5][7]** — original is preserved, translation is a separate file:
+
+| File | Description |
+|------|-------------|
+| `video.srt` | Original subtitle (unchanged) |
 | `video_ID.srt` | Indonesian translation |
 | `video_EN.srt` | English translation |
 | `video_JA.srt` | Japanese translation |
