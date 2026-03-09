@@ -232,7 +232,7 @@ def get_register_note(genre, target_lang):
     return ""
 
 
-def build_batches(blocks, max_tokens=400, min_tokens_for_break=200):
+def build_batches(blocks, max_tokens=200, min_tokens_for_break=100):
     """Build translation batches that prefer to end at sentence boundaries.
     Breaks at sentence-ending punctuation when past min_tokens_for_break,
     or at max_tokens regardless.
@@ -597,7 +597,7 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
     print(f"  [OK] Gemini responsive ({msg[:50]})")
     print(f"  Translating in batches...")
 
-    MAX_TOKENS_PER_BATCH = 400   # increased from 150 for better context
+    MAX_TOKENS_PER_BATCH = 200   # increased from 150 for better context
     GEMINI_BATCH_DELAY   = 5
     MAX_RETRY            = 2
     CONTEXT_WINDOW       = 3     # recent translated lines passed as context
