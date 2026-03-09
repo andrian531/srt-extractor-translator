@@ -15,6 +15,7 @@ set "OUTPUT_FORMAT=srt"
 set "WHISPER_DEVICE=cpu"
 set "AUTO_TRANSLATE=false"
 set "OFFLINE_TRANSLATE=false"
+set "OFFLINE_LLM=false"
 
 :: ============================================================
 :: QUICK DEPENDENCY CHECK
@@ -80,12 +81,23 @@ if "!GEMINI_CMD!"=="" (
 python -c "import transformers" >nul 2>&1
 if not errorlevel 1 set "NLLB_AVAILABLE=true"
 
+set "OLLAMA_AVAILABLE=false"
+set "OLLAMA_MODEL=none"
+ollama --version >nul 2>&1
+if not errorlevel 1 (
+    set "OLLAMA_AVAILABLE=true"
+    if exist "%SCRIPT_DIR%\.ollama" (
+        for /f "usebackq tokens=*" %%M in ("%SCRIPT_DIR%\.ollama") do set "OLLAMA_MODEL=%%M"
+    )
+)
+
 :: ============================================================
 :: MAIN MENU
 :: ============================================================
 :MAIN_LOOP
 set "AUTO_TRANSLATE=false"
 set "OFFLINE_TRANSLATE=false"
+set "OFFLINE_LLM=false"
 cls
 echo ============================================================
 echo   WHISPER SUBTITLE EXTRACTOR
@@ -97,20 +109,24 @@ if not "!GPU_DEVICE!"=="cpu" (
 )
 echo ============================================================
 echo.
-echo   [1] Generate Subtitle          - extract subtitles from video files
-echo   [2] Translate Subtitle         - translate .srt files ^(Gemini + NLLB^)
-echo   [3] Generate + Translate       - extract then auto-translate ^(set ^& forget^)
-echo   [4] Cleanup SRT                - fix overlaps and merge short segments
-echo   [5] Translate Offline          - translate .srt files using NLLB only
-echo   [6] Generate + Translate Offline - extract then translate offline ^(NLLB only^)
+echo   [1] Generate Subtitle            - extract subtitles from video files
+echo   [2] Translate Subtitle           - translate .srt files ^(Gemini + NLLB^)
+echo   [3] Generate + Translate         - extract then auto-translate ^(set ^& forget^)
+echo   [4] Cleanup SRT                  - fix overlaps and merge short segments
+echo   [5] Translate Offline ^(NLLB^)     - translate .srt using NLLB only
+echo   [6] Generate + Translate Offline ^(NLLB^) - generate then translate ^(NLLB only^)
+echo   [7] Translate Offline ^(LLM+NLLB^) - translate .srt using Offline LLM + NLLB
+echo   [8] Generate + Translate Offline ^(LLM+NLLB^) - generate then translate offline
 echo.
-set /p MAIN_MENU="Choose [1-6]: "
+set /p MAIN_MENU="Choose [1-8]: "
 
 if "!MAIN_MENU!"=="2" goto MENU_TRANSLATE
 if "!MAIN_MENU!"=="3" goto MENU_GENERATE_TRANSLATE
 if "!MAIN_MENU!"=="4" goto MENU_CLEANUP
 if "!MAIN_MENU!"=="5" goto MENU_TRANSLATE_OFFLINE
 if "!MAIN_MENU!"=="6" goto MENU_GT_OFFLINE
+if "!MAIN_MENU!"=="7" goto MENU_TRANSLATE_LLM
+if "!MAIN_MENU!"=="8" goto MENU_GT_LLM
 goto MENU_GENERATE
 
 :: ============================================================
@@ -558,6 +574,217 @@ for /l %%i in (1,1,!IDX!) do (
 goto DONE
 
 :: ============================================================
+:: MENU: TRANSLATE OFFLINE (LLM + NLLB)
+:: ============================================================
+:MENU_TRANSLATE_LLM
+cls
+echo ============================================================
+echo   TRANSLATE OFFLINE ^(LLM + NLLB^)
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+if "!OLLAMA_AVAILABLE!"=="false" (
+    echo  [ERROR] Ollama not found. Please run install.bat to set up Offline LLM.
+    echo.
+    goto RETURN_OR_QUIT
+)
+if "!OLLAMA_MODEL!"=="none" (
+    echo  [ERROR] No Offline LLM model configured. Run install.bat and select a model.
+    echo.
+    goto RETURN_OR_QUIT
+)
+echo  [OK] Offline LLM : !OLLAMA_MODEL!
+if "!NLLB_AVAILABLE!"=="true" (
+    echo  [OK] NLLB        : installed ^(fills untranslated gaps^)
+) else (
+    echo  [WARN] NLLB not installed. LLM results will not have gap-filling.
+)
+echo  [INFO] Gemini is skipped. Primary engine: !OLLAMA_MODEL!
+echo.
+
+echo  Scanning for subtitle files ^(.srt^) in: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+set "SIDX=0"
+for /r "%SCRIPT_DIR%" %%f in (*.srt) do (
+    echo %%~nf | findstr /ri "_EN$\|_ID$\|_JA$\|_KO$\|_ZH$\|_TRANSLATED$" >nul
+    if errorlevel 1 (
+        set /a SIDX+=1
+        set "SFILE_!SIDX!=%%f"
+        set "SREL=%%f"
+        set "SREL=!SREL:%SCRIPT_DIR%\=!"
+        echo  [!SIDX!] !SREL!
+    )
+)
+
+if !SIDX!==0 (
+    echo  No .srt files found.
+    goto RETURN_OR_QUIT
+)
+
+echo.
+echo  Found: !SIDX! subtitle file(s^)
+echo.
+
+:LLM_CHOOSE_SRT
+set "SCHOICE="
+set /p SCHOICE="Enter file number (1-!SIDX!) or 'all': "
+
+if /i "!SCHOICE!"=="all" goto LLM_TRANSLATE_ALL
+if "!SCHOICE!"=="" goto LLM_CHOOSE_SRT
+set /a STEST=!SCHOICE! 2>nul
+if !STEST! LSS 1 goto LLM_INVALID_SRT
+if !STEST! GTR !SIDX! goto LLM_INVALID_SRT
+
+set "DETECT_FILE=!SFILE_%SCHOICE%!"
+call :DETECT_SRT_LANG
+call :CHOOSE_TARGET_LANG
+echo.
+call :RUN_TRANSLATE_OFFLINE_LLM "!SFILE_%SCHOICE%!"
+goto LLM_TRANSLATE_DONE
+
+:LLM_INVALID_SRT
+echo  [!] Invalid input
+goto LLM_CHOOSE_SRT
+
+:LLM_TRANSLATE_ALL
+set "DETECT_FILE=!SFILE_1!"
+call :DETECT_SRT_LANG
+call :CHOOSE_TARGET_LANG
+echo.
+for /l %%i in (1,1,!SIDX!) do (
+    echo  [%%i/!SIDX!] Translating: !SFILE_%%i!
+    call :RUN_TRANSLATE_OFFLINE_LLM "!SFILE_%%i!"
+)
+
+:LLM_TRANSLATE_DONE
+echo.
+echo ============================================================
+echo   Offline LLM translation complete!
+echo ============================================================
+echo.
+goto RETURN_OR_QUIT
+
+:: ============================================================
+:: MENU: GENERATE + TRANSLATE OFFLINE (LLM + NLLB)
+:: ============================================================
+:MENU_GT_LLM
+cls
+echo ============================================================
+echo   GENERATE + TRANSLATE OFFLINE ^(LLM + NLLB^)
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+if "!OLLAMA_AVAILABLE!"=="false" (
+    echo  [WARN] Ollama not found. Translation step will be skipped.
+    echo  Run install.bat to set up Offline LLM.
+    echo.
+)
+if "!OLLAMA_AVAILABLE!"=="true" (
+    echo  [OK] Offline LLM : !OLLAMA_MODEL!
+)
+if "!NLLB_AVAILABLE!"=="true" (
+    echo  [OK] NLLB        : installed ^(fills untranslated gaps^)
+)
+echo  [INFO] Gemini is skipped. Translation done offline via LLM + NLLB.
+echo.
+
+echo  Scanning for video files in: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+set "IDX=0"
+for /r "%SCRIPT_DIR%" %%f in (
+    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
+) do (
+    set /a IDX+=1
+    set "FILE_!IDX!=%%f"
+    set "REL=%%f"
+    set "REL=!REL:%SCRIPT_DIR%\=!"
+    echo  [!IDX!] !REL!
+)
+
+if !IDX!==0 (
+    echo  No video files found in this folder.
+    goto RETURN_OR_QUIT
+)
+
+echo.
+echo  Found: !IDX! video file(s^)
+echo.
+
+:GTL_CHOOSE_FILE
+set "CHOICE="
+set /p CHOICE="Enter file number (1-!IDX!) or 'all': "
+
+if /i "!CHOICE!"=="all" goto GTL_CHOOSE_OPTIONS
+if "!CHOICE!"=="" goto GTL_CHOOSE_FILE
+set /a TEST_CHOICE=!CHOICE! 2>nul
+if !TEST_CHOICE! LSS 1 goto GTL_INVALID
+if !TEST_CHOICE! GTR !IDX! goto GTL_INVALID
+goto GTL_CHOOSE_OPTIONS
+
+:GTL_INVALID
+echo  [!] Invalid input
+goto GTL_CHOOSE_FILE
+
+:GTL_CHOOSE_OPTIONS
+set "VID_MIN=0"
+set "VID_HHMM=unknown"
+if /i not "!CHOICE!"=="all" (
+    set "VIDEO_FILE=!FILE_%CHOICE%!"
+    call :GET_VIDEO_DURATION
+)
+echo.
+echo ============================================================
+echo   TRANSCRIPTION OPTIONS
+echo ============================================================
+if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
+    echo  Duration : !VID_HHMM!
+)
+echo.
+call :CHOOSE_MODEL
+call :CHOOSE_LANGUAGE
+call :CHOOSE_TARGET_LANG
+echo.
+echo ============================================================
+echo   SUMMARY
+echo ============================================================
+echo   Model   : !MODEL!
+if "!LANGUAGE!"=="" (
+    echo   Language: Auto-detect
+) else (
+    echo   Language: !LANGUAGE!
+)
+echo   Device  : !WHISPER_DEVICE!
+echo   Output  : .!OUTPUT_FORMAT!
+echo   Translate to: !TARGET_LANG! ^(Offline LLM + NLLB^)
+echo ============================================================
+echo.
+set /p CONFIRM="Continue? (Y/N): "
+if /i not "!CONFIRM!"=="Y" goto GTL_CHOOSE_FILE
+
+set "AUTO_TRANSLATE=true"
+set "OFFLINE_LLM=true"
+
+if /i "!CHOICE!"=="all" goto GTL_PROCESS_ALL
+
+set "TARGET_FILE=!FILE_%CHOICE%!"
+call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GTL_PROCESS_ALL
+for /l %%i in (1,1,!IDX!) do (
+    echo.
+    echo  [%%i/!IDX!] Processing: !FILE_%%i!
+    call :RUN_WHISPER "!FILE_%%i!"
+)
+goto DONE
+
+:: ============================================================
 :: MENU: GENERATE + TRANSLATE (set & forget)
 :: ============================================================
 :MENU_GENERATE_TRANSLATE
@@ -968,7 +1195,9 @@ if exist "!SRT_FILE!" (
             set "DETECT_FILE=!SRT_FILE!"
             call :DETECT_SRT_LANG
         )
-        if "!OFFLINE_TRANSLATE!"=="true" (
+        if "!OFFLINE_LLM!"=="true" (
+            call :RUN_TRANSLATE_OFFLINE_LLM "!SRT_FILE!"
+        ) else if "!OFFLINE_TRANSLATE!"=="true" (
             call :RUN_TRANSLATE_OFFLINE "!SRT_FILE!"
         ) else (
             call :RUN_TRANSLATE "!SRT_FILE!"
@@ -1146,6 +1375,27 @@ if "!NLLB_AVAILABLE!"=="false" (
 
 echo  [*] Translating offline with NLLB...
 python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!"
+goto :eof
+
+:: ============================================================
+:: SUBROUTINE: Run translation OFFLINE (LLM primary + NLLB gap-fill)
+:: Input : file path (arg), TARGET_LANG, OLLAMA_MODEL, NLLB_AVAILABLE
+:: ============================================================
+:RUN_TRANSLATE_OFFLINE_LLM
+set "TRANS_FILE=%~1"
+
+if "!OLLAMA_AVAILABLE!"=="false" (
+    echo  [INFO] Ollama not available. Skipping LLM translation.
+    echo  Run install.bat to set up Offline LLM.
+    goto :eof
+)
+if "!OLLAMA_MODEL!"=="none" (
+    echo  [INFO] No Offline LLM model configured. Run install.bat.
+    goto :eof
+)
+
+echo  [*] Translating offline with !OLLAMA_MODEL! ^(+ NLLB for gaps^)...
+python "%~dp0translate_srt.py" "!TRANS_FILE!" "!OLLAMA_MODEL!" "ollama" "!TARGET_LANG!"
 goto :eof
 
 :: ============================================================

@@ -454,7 +454,7 @@ if not errorlevel 1 (
 
 if "!NLLB_PKG_OK!"=="false" (
     echo  [INFO] NLLB skipped. You can install it later and re-run install.bat.
-    goto FINISH
+    goto OLLAMA_SECTION
 )
 
 set "HF_HUB=%USERPROFILE%\.cache\huggingface\hub"
@@ -488,7 +488,7 @@ echo   Recommendation: !NLLB_RECOMMENDED! ^(!NLLB_RECOMMENDED_REASON!^)
 echo.
 set /p NLLB_DL="Choose [1-2 / S, default=!NLLB_DEFAULT!]: "
 if "!NLLB_DL!"=="" set "NLLB_DL=!NLLB_DEFAULT!"
-if /i "!NLLB_DL!"=="S" goto FINISH
+if /i "!NLLB_DL!"=="S" goto OLLAMA_SECTION
 if "!NLLB_DL!"=="1" goto NLLB_DL_600M
 if "!NLLB_DL!"=="2" goto NLLB_DL_1B3
 goto NLLB_MODEL_LOOP
@@ -504,7 +504,7 @@ if errorlevel 1 (
 echo  [OK] nllb-200-distilled-600M downloaded
 echo 600M>"%SCRIPT_DIR%\.nllb"
 echo  [OK] Model preference saved to .nllb
-goto FINISH
+goto OLLAMA_SECTION
 
 :NLLB_DL_1B3
 echo.
@@ -517,7 +517,148 @@ if errorlevel 1 (
 echo  [OK] nllb-200-distilled-1.3B downloaded
 echo 1.3B>"%SCRIPT_DIR%\.nllb"
 echo  [OK] Model preference saved to .nllb
-goto FINISH
+goto OLLAMA_SECTION
+
+:: ============================================================
+:: STEP 5d: Offline LLM Translation (via Ollama runtime)
+:: ============================================================
+:OLLAMA_SECTION
+echo.
+echo [5d] Offline LLM Translation ^(optional^)
+echo  Run Qwen2.5 / DeepSeek / Mistral locally for context-aware translation.
+echo  Uses Ollama as the runtime engine ^(REST API at localhost:11434^).
+echo  No internet needed after model download.
+echo.
+
+set "OLLAMA_FOUND=false"
+set "CURRENT_OLLAMA_MODEL=none"
+
+ollama --version >nul 2>&1
+if not errorlevel 1 (
+    set "OLLAMA_FOUND=true"
+    for /f "tokens=*" %%v in ('ollama --version 2^>^&1') do echo  [OK] Ollama runtime: %%v
+) else (
+    echo  [!] Ollama runtime not found.
+    echo.
+    set /p INSTALL_OLLAMA="  Install Ollama now via winget? (Y/N, default=Y): "
+    if /i "!INSTALL_OLLAMA!"=="N" (
+        echo  [INFO] Skipped. To install manually: https://ollama.com/download
+        echo         Re-run install.bat after installing to set up models.
+        goto FINISH
+    )
+    echo  Installing Ollama via winget...
+    winget install --id Ollama.Ollama -e --silent
+    if errorlevel 1 (
+        echo  [WARN] winget install failed.
+        echo         Download manually: https://ollama.com/download
+        echo         Re-run install.bat after installing to set up models.
+        goto FINISH
+    )
+    :: Refresh PATH so ollama is found without reopening terminal
+    for /f "tokens=*" %%P in ('powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable(\"PATH\",\"Machine\")"') do set "PATH=%%P;%PATH%"
+    ollama --version >nul 2>&1
+    if errorlevel 1 (
+        echo  [OK] Ollama installed. Please restart install.bat to continue model setup.
+        echo       ^(PATH refresh may require a new terminal^)
+        goto FINISH
+    )
+    set "OLLAMA_FOUND=true"
+    echo  [OK] Ollama installed successfully
+)
+
+:: Start Ollama service if not running (needed for ollama list / pull)
+ollama list >nul 2>&1
+if errorlevel 1 (
+    echo  [INFO] Starting Ollama service...
+    start /b ollama serve >nul 2>&1
+    timeout /t 3 >nul
+)
+
+if exist "%SCRIPT_DIR%\.ollama" (
+    for /f "usebackq tokens=*" %%M in ("%SCRIPT_DIR%\.ollama") do set "CURRENT_OLLAMA_MODEL=%%M"
+    echo  Current model: !CURRENT_OLLAMA_MODEL!
+)
+
+:: Check which models are already pulled
+set "OLL_ST_1=  " & set "OLL_ST_2=  " & set "OLL_ST_3=  "
+set "OLL_ST_4=  " & set "OLL_ST_5=  " & set "OLL_ST_6=  "
+
+for /f "skip=1 tokens=1" %%M in ('ollama list 2^>nul') do (
+    if "%%M"=="qwen2.5:1.5b"     set "OLL_ST_1=[pulled]"
+    if "%%M"=="qwen2.5:3b"       set "OLL_ST_2=[pulled]"
+    if "%%M"=="qwen2.5:7b"       set "OLL_ST_3=[pulled]"
+    if "%%M"=="deepseek-r1:1.5b" set "OLL_ST_4=[pulled]"
+    if "%%M"=="deepseek-r1:7b"   set "OLL_ST_5=[pulled]"
+    if "%%M"=="mistral:7b"       set "OLL_ST_6=[pulled]"
+)
+
+:OLLAMA_MODEL_LOOP
+echo.
+echo  Offline LLM models ^(downloaded via Ollama^):
+echo  ---------------------------------------------------------------------------
+echo   No  Model              Size    VRAM min  CPU    Sensor   Status
+echo  ---------------------------------------------------------------------------
+echo   [1] qwen2.5:1.5b       ~1.0GB  ~2 GB     OK     Medium   !OLL_ST_1!
+echo   [2] qwen2.5:3b         ~2.0GB  ~4 GB     OK     Medium   !OLL_ST_2!
+echo   [3] qwen2.5:7b         ~4.7GB  ~6 GB     Slow   Medium   !OLL_ST_3!
+echo   [4] deepseek-r1:1.5b   ~1.1GB  ~2 GB     OK     Low      !OLL_ST_4!
+echo   [5] deepseek-r1:7b     ~4.7GB  ~6 GB     Slow   Low      !OLL_ST_5!
+echo   [6] mistral:7b         ~4.1GB  ~5 GB     Slow   Low      !OLL_ST_6!
+echo  ---------------------------------------------------------------------------
+echo   [S] Skip / Done
+echo  ---------------------------------------------------------------------------
+echo.
+echo  Column guide:
+echo   VRAM min = minimum GPU VRAM required
+echo   CPU      = can run without GPU (5-10x slower)
+echo   Sensor   = likelihood model refuses adult/explicit content translation
+echo              Low=rarely refuses  Medium=sometimes  High=often refuses
+echo.
+echo  Recommendation by VRAM:
+echo   ^< 4 GB VRAM  : [4] deepseek-r1:1.5b  ^(Low sensor, lightweight^)
+echo   4 - 6 GB     : [4] deepseek-r1:1.5b  ^(Low sensor^)
+echo   6 - 12 GB    : [5] deepseek-r1:7b     ^(Low sensor, best quality^)
+echo   12 GB+       : [5] deepseek-r1:7b  or  [6] mistral:7b
+echo   No GPU ^(CPU^) : [1] qwen2.5:1.5b  or  [4] deepseek-r1:1.5b
+echo.
+if not "!CURRENT_OLLAMA_MODEL!"=="none" (
+    echo  Current selection: !CURRENT_OLLAMA_MODEL! ^(press Enter to keep^)
+    echo.
+)
+
+set /p OLLAMA_CHOICE="Choose model to download and use [1-6 / S, default=S]: "
+if "!OLLAMA_CHOICE!"=="" (
+    if not "!CURRENT_OLLAMA_MODEL!"=="none" (
+        echo  [INFO] Keeping current model: !CURRENT_OLLAMA_MODEL!
+    )
+    goto FINISH
+)
+if /i "!OLLAMA_CHOICE!"=="S" goto FINISH
+
+set "OLLAMA_MODEL="
+if "!OLLAMA_CHOICE!"=="1" set "OLLAMA_MODEL=qwen2.5:1.5b"
+if "!OLLAMA_CHOICE!"=="2" set "OLLAMA_MODEL=qwen2.5:3b"
+if "!OLLAMA_CHOICE!"=="3" set "OLLAMA_MODEL=qwen2.5:7b"
+if "!OLLAMA_CHOICE!"=="4" set "OLLAMA_MODEL=deepseek-r1:1.5b"
+if "!OLLAMA_CHOICE!"=="5" set "OLLAMA_MODEL=deepseek-r1:7b"
+if "!OLLAMA_CHOICE!"=="6" set "OLLAMA_MODEL=mistral:7b"
+
+if "!OLLAMA_MODEL!"=="" goto OLLAMA_MODEL_LOOP
+
+echo.
+echo  Downloading !OLLAMA_MODEL! (this may take several minutes)...
+ollama pull !OLLAMA_MODEL!
+if errorlevel 1 (
+    echo  [ERROR] Failed to download !OLLAMA_MODEL!
+    echo  Make sure Ollama service is running ^(run: ollama serve^)
+    goto OLLAMA_MODEL_LOOP
+)
+echo !OLLAMA_MODEL!>"%SCRIPT_DIR%\.ollama"
+echo  [OK] Model ready: !OLLAMA_MODEL!
+
+echo.
+set /p OLLAMA_MORE="  Download another model? (Y/N, default=N): "
+if /i "!OLLAMA_MORE!"=="Y" goto OLLAMA_MODEL_LOOP
 
 :FINISH
 echo installed > "%SCRIPT_DIR%\.installed"
@@ -525,10 +666,21 @@ echo installed > "%SCRIPT_DIR%\.installed"
 set "USE_BAT=whisper-subtitle.bat"
 if "!INSTALL_ENGINE!"=="whisperx" set "USE_BAT=whisperx-subtitle.bat"
 
+set "NLLB_STATUS=not installed"
+if exist "%SCRIPT_DIR%\.nllb" (
+    for /f "usebackq tokens=*" %%N in ("%SCRIPT_DIR%\.nllb") do set "NLLB_STATUS=%%N"
+)
+set "OLLAMA_STATUS=not installed"
+if exist "%SCRIPT_DIR%\.ollama" (
+    for /f "usebackq tokens=*" %%O in ("%SCRIPT_DIR%\.ollama") do set "OLLAMA_STATUS=%%O"
+)
+
 echo.
 echo ============================================================
 echo  [SUCCESS] Installation complete!
 echo  Engine   : !INSTALL_ENGINE!
+echo  NLLB     : !NLLB_STATUS!
+echo  Offline LLM : !OLLAMA_STATUS!
 echo  Run      : !USE_BAT!
 echo ============================================================
 echo.

@@ -21,19 +21,30 @@ if "!CURRENT_ENGINE!"=="none" (
     echo   Installed engine: !CURRENT_ENGINE!
 )
 echo.
+set "OLLAMA_MARKER=none"
+if exist "%SCRIPT_DIR%\.ollama" (
+    for /f "usebackq tokens=*" %%O in ("%SCRIPT_DIR%\.ollama") do set "OLLAMA_MARKER=%%O"
+)
+
 echo   [1] Uninstall WhisperX  (whisperx + faster-whisper + model cache)
 echo   [2] Uninstall Whisper   (openai-whisper + model cache)
 echo   [3] Uninstall both
 echo   [4] Uninstall NLLB      (transformers packages + model cache)
-echo   [5] Cancel
+if "!OLLAMA_MARKER!"=="none" (
+    echo   [5] Uninstall Offline LLM  (remove downloaded models + marker^)
+) else (
+    echo   [5] Uninstall Offline LLM  (model: !OLLAMA_MARKER!^)
+)
+echo   [6] Cancel
 echo.
-set /p CHOICE="Choose [1-5]: "
+set /p CHOICE="Choose [1-6]: "
 
-if "!CHOICE!"=="5" exit /b 0
+if "!CHOICE!"=="6" exit /b 0
 if "!CHOICE!"=="1" goto UNINSTALL_WHISPERX
 if "!CHOICE!"=="2" goto UNINSTALL_WHISPER
 if "!CHOICE!"=="3" goto UNINSTALL_BOTH
 if "!CHOICE!"=="4" goto UNINSTALL_NLLB
+if "!CHOICE!"=="5" goto UNINSTALL_OLLAMA
 echo  Invalid choice.
 pause
 exit /b 0
@@ -136,6 +147,55 @@ if exist "%SCRIPT_DIR%\.nllb" (
 echo.
 echo ============================================================
 echo  [DONE] NLLB uninstall complete.
+echo ============================================================
+echo.
+pause
+exit /b 0
+
+:UNINSTALL_OLLAMA
+echo.
+echo  Removing Offline LLM models...
+
+set "OLL_MODEL=none"
+if exist "%SCRIPT_DIR%\.ollama" (
+    for /f "usebackq tokens=*" %%M in ("%SCRIPT_DIR%\.ollama") do set "OLL_MODEL=%%M"
+)
+
+if "!OLL_MODEL!"=="none" (
+    echo  [INFO] No .ollama marker found ^(no model recorded^).
+) else (
+    echo  Recorded model: !OLL_MODEL!
+    set /p REMOVE_OLL_MODEL="  Remove model '!OLL_MODEL!' from Ollama? (Y/N, default=Y): "
+    if /i not "!REMOVE_OLL_MODEL!"=="N" (
+        ollama rm !OLL_MODEL! >nul 2>&1
+        if errorlevel 1 (
+            echo  [WARN] Could not remove !OLL_MODEL! - it may not be installed or Ollama service is not running.
+        ) else (
+            echo  [OK] Ollama model removed: !OLL_MODEL!
+        )
+    )
+)
+
+echo.
+set /p REMOVE_ALL_OLL="  Remove ALL other Ollama models too? (Y/N, default=N): "
+if /i "!REMOVE_ALL_OLL!"=="Y" (
+    for /f "skip=1 tokens=1" %%M in ('ollama list 2^>nul') do (
+        echo  Removing: %%M
+        ollama rm %%M >nul 2>&1
+    )
+    echo  [OK] All Ollama models removed
+)
+
+if exist "%SCRIPT_DIR%\.ollama" (
+    del "%SCRIPT_DIR%\.ollama"
+    echo  [OK] .ollama marker removed
+)
+
+echo.
+echo ============================================================
+echo  [DONE] Offline LLM uninstall complete.
+echo  Note: Ollama runtime itself was NOT uninstalled.
+echo  To remove Ollama: Control Panel ^> Programs ^> Uninstall Ollama
 echo ============================================================
 echo.
 pause

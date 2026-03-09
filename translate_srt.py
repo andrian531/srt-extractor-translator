@@ -257,6 +257,26 @@ def build_batches(blocks, max_tokens=200, min_tokens_for_break=100):
     return batches
 
 
+def still_in_source_lang(text, source_lang):
+    """Return True if text still appears to be in the source language
+    (i.e. translation failed / was skipped by the LLM).
+    Handles ja, ko, zh; Latin-script languages (en, id) are skipped
+    because reliable per-segment detection is not feasible without
+    an external library.
+    """
+    if not source_lang or not text:
+        return False
+    if source_lang == 'ja':
+        # hiragana or katakana present → definitely still Japanese
+        return bool(re.search(r'[\u3040-\u30ff]', text))
+    if source_lang == 'ko':
+        return bool(re.search(r'[\uac00-\ud7a3]', text))
+    if source_lang == 'zh':
+        # CJK characters present in target text → still Chinese
+        return bool(re.search(r'[\u4e00-\u9fff]', text))
+    return False
+
+
 def detect_artifacts(translated_blocks, source_lang=""):
     """Detect translation quality issues for reporting."""
     issues = []
@@ -363,6 +383,42 @@ def run_translate_prompt(engine_cmd, engine_type, prompt):
         return -2, "", str(e)
     except Exception as e:
         return -3, "", str(e)
+
+
+def run_translate_prompt_ollama(model_name, prompt, timeout=300):
+    """Call Ollama REST API. Returns (rc, stdout, stderr)."""
+    import urllib.request
+    import urllib.error
+    import json
+    try:
+        payload = json.dumps({
+            "model": model_name,
+            "prompt": prompt,
+            "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "http://localhost:11434/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        response = result.get("response", "").strip()
+        # Strip <think>...</think> reasoning blocks (DeepSeek-R1 etc.)
+        response = re.sub(r"<think>[\s\S]*?</think>", "", response, flags=re.IGNORECASE).strip()
+        return 0, response, ""
+    except urllib.error.URLError as e:
+        return -1, "", f"Ollama not reachable: {e}"
+    except Exception as e:
+        return -2, "", str(e)
+
+
+def check_ollama_responsive(model_name):
+    """Return (ok, message) — checks if Ollama is running and model responds."""
+    rc, stdout, stderr = run_translate_prompt_ollama(model_name, "Reply with only the word: OK", timeout=60)
+    if rc == 0 and stdout.strip():
+        return True, stdout.strip()[:80]
+    return False, stderr or "no response"
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +591,473 @@ def _translate_nllb_only(srt_path, output_path, target_lang, source_lang, script
 
 
 # ---------------------------------------------------------------------------
+# Ollama offline LLM translation (primary + NLLB second pass)
+# ---------------------------------------------------------------------------
+def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_dir, model_name):
+    """Translate using local Ollama LLM as primary engine; NLLB fills gaps."""
+    print(f"  Engine         : Ollama LLM ({model_name})")
+    print(f"  Target language: {target_lang}")
+
+    with open(srt_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    blocks = parse_srt(content)
+    if not blocks:
+        print("  [ERROR] No text found in SRT file")
+        return 1
+
+    tmp_dir = output_path + "_tmp"
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    # Save/restore language settings in tmp (for resume consistency and debugging)
+    _src_file = os.path.join(tmp_dir, "source_lang.txt")
+    _tgt_file = os.path.join(tmp_dir, "target_lang.txt")
+    if source_lang and not os.path.exists(_src_file):
+        with open(_src_file, "w", encoding="utf-8") as f:
+            f.write(source_lang)
+    elif not source_lang and os.path.exists(_src_file):
+        with open(_src_file, "r", encoding="utf-8") as f:
+            source_lang = f.read().strip()
+    if not os.path.exists(_tgt_file):
+        with open(_tgt_file, "w", encoding="utf-8") as f:
+            f.write(target_lang)
+
+    # Genre detection (cached)
+    genre_cache_file = os.path.join(tmp_dir, "genre.txt")
+    print(f"  Detecting content genre...")
+    if os.path.exists(genre_cache_file):
+        with open(genre_cache_file, "r", encoding="utf-8") as f:
+            genre = f.read().strip()
+        print(f"  Genre          : {genre}")
+    else:
+        sample_lines = []
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line or line.isdigit() or "-->" in line:
+                continue
+            sample_lines.append(line)
+            if len(sample_lines) >= 60:
+                break
+        sample = "\n".join(sample_lines)
+        genre_prompt = (
+            "Based on the following subtitle excerpt, identify the genre and type of this content "
+            "in ONE concise phrase (e.g. 'Japanese medical drama', 'Korean romantic comedy', "
+            "'adult role-play scenario set in a clinic', etc.).\n"
+            "Be specific about setting, tone, and any notable themes.\n"
+            "Reply with ONLY the genre/type description, nothing else.\n\n"
+            f"Subtitle excerpt:\n{sample}"
+        )
+        rc, genre_out, _ = run_translate_prompt_ollama(model_name, genre_prompt, timeout=120)
+        if rc == 0 and genre_out.strip():
+            genre = genre_out.strip().split("\n")[0][:300]
+            print(f"  Genre          : {genre}")
+            with open(genre_cache_file, "w", encoding="utf-8") as f:
+                f.write(genre)
+        else:
+            genre = ""
+            print(f"  Genre          : (not detected)")
+
+    total = len(blocks)
+    print(f"  Total segments : {total}")
+
+    print(f"  Checking Ollama...")
+    ok, msg = check_ollama_responsive(model_name)
+    if not ok:
+        print(f"  [ERROR] Ollama not responding: {msg}")
+        return 1
+    print(f"  [OK] Ollama responsive")
+    print(f"  Translating in batches...")
+
+    MAX_TOKENS_PER_BATCH = 200
+    LLM_BATCH_DELAY      = 1
+    MAX_RETRY            = 2
+    CONTEXT_WINDOW       = 3
+
+    def est_tok(text):
+        return max(1, len(text) // 4)
+
+    batches = build_batches(blocks, max_tokens=MAX_TOKENS_PER_BATCH)
+    total_batch = len(batches)
+    print(f"  Total batches  : {total_batch} (max ~{MAX_TOKENS_PER_BATCH} tokens/batch)")
+    print(f"  Temp folder    : {tmp_dir}")
+
+    translated_blocks = []
+    source_map    = {}
+    recent_context = []
+
+    LANG_NAMES = {
+        "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
+        "en": "English",  "id": "Indonesian",
+    }
+    src_label     = LANG_NAMES.get(source_lang, "") if source_lang else ""
+    from_clause   = f" from {src_label}" if src_label else ""
+    genre_line    = f"Content type: {genre}\n" if genre else ""
+    register_note = get_register_note(genre, target_lang)
+
+    for batch_num, batch in enumerate(batches, 1):
+        batch_tokens = sum(est_tok(t) for _, _, t in batch)
+        tmp_file = os.path.join(tmp_dir, f"batch_{batch_num:04d}.txt")
+
+        if os.path.exists(tmp_file):
+            with open(tmp_file, "r", encoding="utf-8") as f:
+                cached = f.read()
+            translated_lines = {}
+            for line in cached.strip().split("\n"):
+                m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                if m and m.group(2).strip():
+                    translated_lines[m.group(1)] = m.group(2)
+            matched = sum(1 for idx, _, _ in batch if idx in translated_lines)
+            if matched > 0:
+                print(f"  Batch {batch_num}/{total_batch} - resumed from cache ({matched}/{len(batch)} match)")
+                for idx, ts, text in batch:
+                    trans = translated_lines.get(idx, text)
+                    translated_blocks.append((idx, ts, trans))
+                    if idx in translated_lines:
+                        recent_context.append((idx, trans))
+                recent_context = recent_context[-CONTEXT_WINDOW:]
+                continue
+            else:
+                print(f"  Batch {batch_num}/{total_batch} - cache invalid, reprocessing")
+                os.remove(tmp_file)
+
+        if batch_num > 1:
+            time.sleep(LLM_BATCH_DELAY)
+
+        print(f"  Batch {batch_num}/{total_batch} ({len(batch)} seg, ~{batch_tokens} tok)...", end="", flush=True)
+
+        lines_to_translate = [
+            f"[{idx}] {preprocess_subtitle_text(text)}"
+            for idx, ts, text in batch
+        ]
+        context_section = ""
+        if recent_context:
+            ctx_lines = "\n".join(f"[{idx}] {text}" for idx, text in recent_context)
+            context_section = (
+                f"Recent dialogue (already translated — for context only, do NOT retranslate):\n"
+                f"{ctx_lines}\n\n"
+                f"Now translate ONLY these lines:\n"
+            )
+
+        prompt = (
+            f"You are a professional subtitle translator.\n"
+            f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
+            f"{genre_line}"
+            "\nGuidelines:\n"
+            "- Write natural, fluent translations that feel native in the target language\n"
+            "- Preserve the speaker's tone, emotion, and personality (casual, formal, excited, sad, etc.)\n"
+            "- Adapt idioms and cultural expressions naturally — avoid word-for-word literal translation\n"
+            "- Use vocabulary and phrasing appropriate to the content type above\n"
+            "- Keep translations concise so they are easy to read quickly as subtitles\n"
+            f"{register_note}"
+            "- Non-verbal sounds (sighs, moans, gasps like 'ああ', 'はぁ') should be adapted "
+            "as natural target-language expressions (e.g. 'haah', 'aah') — do not skip them\n"
+            "- Some lines may be short fragments or continuations — translate them as short natural phrases\n"
+            "- Keep the [number] prefix on each line exactly as-is\n"
+            "- Output ONLY the translated lines, no comments or explanations\n\n"
+            + context_section
+            + "\n".join(lines_to_translate)
+        )
+
+        rc, stdout, stderr = -1, "", ""
+        for attempt in range(1, MAX_RETRY + 2):
+            rc, stdout, stderr = run_translate_prompt_ollama(model_name, prompt)
+            if rc == 0 and stdout.strip():
+                break
+            if attempt <= MAX_RETRY:
+                wait = attempt * 5
+                print(f" err, retry {attempt}/{MAX_RETRY} in {wait}s...", end="", flush=True)
+                time.sleep(wait)
+
+        if rc != 0 or not stdout.strip():
+            print(f" FAILED ({stderr[:80]})")
+            for idx, ts, text in batch:
+                translated_blocks.append((idx, ts, text))
+            continue
+
+        translated_lines = {}
+        for line in stdout.strip().split("\n"):
+            m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+            if m:
+                translated_lines[m.group(1)] = m.group(2)
+
+        matched = sum(1 for idx, _, _ in batch if idx in translated_lines)
+        print(f" OK ({matched}/{len(batch)} match)")
+
+        debug_file = os.path.join(tmp_dir, f"batch_{batch_num:04d}_raw.txt")
+        with open(debug_file, "w", encoding="utf-8") as f:
+            f.write(stdout)
+
+        if matched > 0:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                for idx, _, _ in batch:
+                    text_out = translated_lines.get(idx, "")
+                    f.write(f"[{idx}] {text_out}\n")
+        else:
+            print(f"      [!] 0 matches - cache not saved, will retry next run")
+
+        for idx, ts, text in batch:
+            trans = translated_lines.get(idx, text)
+            translated_blocks.append((idx, ts, trans))
+            if idx in translated_lines:
+                recent_context.append((idx, trans))
+        recent_context = recent_context[-CONTEXT_WINDOW:]
+
+    # Record LLM-translated segments
+    for orig, trans in zip(blocks, translated_blocks):
+        if orig[2] != trans[2]:
+            source_map[orig[0]] = "llm"
+
+    # Second pass: NLLB fills gaps the LLM couldn't translate
+    # Also catch segments where LLM returned text but still in source language
+    untranslated = [
+        orig for orig, trans in zip(blocks, translated_blocks)
+        if orig[2] == trans[2] or still_in_source_lang(trans[2], source_lang)
+    ]
+    if untranslated:
+        print(f"  [+] Second pass: {len(untranslated)} untranslated segment(s)")
+        try:
+            nllb_results, nllb_fallback = translate_with_nllb(untranslated, source_lang, target_lang, script_dir)
+            if nllb_results:
+                trans_map = {idx: txt for idx, ts, txt in translated_blocks}
+                for idx, val in nllb_results.items():
+                    trans_map[idx] = val
+                    source_map[idx] = "nllb"
+                translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
+                print(f"  [NLLB] Filled {len(nllb_results)}/{len(untranslated)} gap(s)")
+
+                # Retry NLLB-missed segments with Ollama
+                still_missing = [b for b in untranslated if b[0] not in nllb_results]
+                if still_missing:
+                    print(f"  [LLM] {len(still_missing)} NLLB-missed segment(s) — retrying with Ollama...")
+                    miss_batches = build_batches(still_missing, max_tokens=MAX_TOKENS_PER_BATCH)
+                    trans_map = {idx: txt for idx, ts, txt in translated_blocks}
+                    for mb_num, mb in enumerate(miss_batches, 1):
+                        mb_cache = os.path.join(tmp_dir, f"nllb_miss_{mb[0][0]:06}.txt")
+                        if os.path.exists(mb_cache):
+                            with open(mb_cache, "r", encoding="utf-8") as f:
+                                cached = f.read()
+                            mb_cached = {}
+                            for line in cached.strip().split("\n"):
+                                mm = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                                if mm and mm.group(2).strip():
+                                    mb_cached[mm.group(1)] = mm.group(2)
+                            matched = sum(1 for idx, _, _ in mb if idx in mb_cached)
+                            if matched > 0:
+                                print(f"  LLM {mb_num}/{len(miss_batches)} - from cache ({matched}/{len(mb)})")
+                                for idx, ts, text in mb:
+                                    if idx in mb_cached:
+                                        trans_map[idx] = mb_cached[idx]
+                                continue
+
+                        time.sleep(LLM_BATCH_DELAY)
+                        print(f"  LLM {mb_num}/{len(miss_batches)} ({len(mb)} seg)...", end="", flush=True)
+                        lines_to_translate = [
+                            f"[{idx}] {preprocess_subtitle_text(text)}"
+                            for idx, ts, text in mb
+                        ]
+                        miss_prompt = (
+                            f"You are a professional subtitle translator.\n"
+                            f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
+                            f"{genre_line}"
+                            "\nGuidelines:\n"
+                            "- Write natural, fluent translations that feel native in the target language\n"
+                            "- Adapt idioms and cultural expressions naturally\n"
+                            "- Keep translations concise for subtitle display\n"
+                            f"{register_note}"
+                            "- Non-verbal sounds should be adapted as natural expressions — do not skip them\n"
+                            "- Keep the [number] prefix on each line exactly as-is\n"
+                            "- Output ONLY the translated lines, no comments or explanations\n\n"
+                            + "\n".join(lines_to_translate)
+                        )
+                        rc, stdout, stderr = -1, "", ""
+                        for attempt in range(1, MAX_RETRY + 2):
+                            rc, stdout, stderr = run_translate_prompt_ollama(model_name, miss_prompt)
+                            if rc == 0 and stdout.strip():
+                                break
+                            if attempt <= MAX_RETRY:
+                                wait = attempt * 5
+                                print(f" retry {attempt}/{MAX_RETRY}...", end="", flush=True)
+                                time.sleep(wait)
+
+                        if rc != 0 or not stdout.strip():
+                            print(f" FAILED")
+                            nllb_used = 0
+                            for idx, *_ in mb:
+                                if idx in nllb_fallback:
+                                    trans_map[idx] = nllb_fallback[idx]
+                                    source_map[idx] = "nllb_fallback"
+                                    nllb_used += 1
+                            if nllb_used:
+                                print(f"      [!] Using NLLB fallback for {nllb_used} segment(s)")
+                            continue
+
+                        mb_translated = {}
+                        for line in stdout.strip().split("\n"):
+                            mm = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                            if mm:
+                                mb_translated[mm.group(1)] = mm.group(2)
+
+                        matched = sum(1 for idx, _, _ in mb if idx in mb_translated)
+                        print(f" OK ({matched}/{len(mb)})")
+                        if matched > 0:
+                            with open(mb_cache, "w", encoding="utf-8") as f:
+                                for idx, _, _ in mb:
+                                    f.write(f"[{idx}] {mb_translated.get(idx, '')}\n")
+                            for idx, *_ in mb:
+                                if idx in mb_translated:
+                                    trans_map[idx] = mb_translated[idx]
+                                    source_map[idx] = "llm_retry"
+                        else:
+                            nllb_used = 0
+                            for idx, *_ in mb:
+                                if idx in nllb_fallback:
+                                    trans_map[idx] = nllb_fallback[idx]
+                                    source_map[idx] = "nllb_fallback"
+                                    nllb_used += 1
+                            if nllb_used:
+                                print(f"      [!] Using NLLB fallback for {nllb_used} segment(s)")
+
+                    translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
+            else:
+                print(f"  [NLLB] No segments translated (language pair may not be supported)")
+
+        except ImportError:
+            print(f"  [!] NLLB not installed — retrying remaining with Ollama...")
+            retry_batches = build_batches(untranslated, max_tokens=MAX_TOKENS_PER_BATCH)
+            trans_map = {idx: txt for idx, ts, txt in translated_blocks}
+            for rb_num, rb in enumerate(retry_batches, 1):
+                rb_cache = os.path.join(tmp_dir, f"retry_{rb[0][0]:06}.txt")
+                if os.path.exists(rb_cache):
+                    with open(rb_cache, "r", encoding="utf-8") as f:
+                        cached = f.read()
+                    rb_cached = {}
+                    for line in cached.strip().split("\n"):
+                        m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                        if m and m.group(2).strip():
+                            rb_cached[m.group(1)] = m.group(2)
+                    matched = sum(1 for idx, _, _ in rb if idx in rb_cached)
+                    if matched > 0:
+                        print(f"  Retry {rb_num}/{len(retry_batches)} - from cache ({matched}/{len(rb)})")
+                        for idx, ts, text in rb:
+                            if idx in rb_cached:
+                                trans_map[idx] = rb_cached[idx]
+                        continue
+
+                time.sleep(LLM_BATCH_DELAY)
+                print(f"  Retry {rb_num}/{len(retry_batches)} ({len(rb)} seg)...", end="", flush=True)
+                lines_to_translate = [
+                    f"[{idx}] {preprocess_subtitle_text(text)}"
+                    for idx, ts, text in rb
+                ]
+                retry_prompt = (
+                    f"You are a professional subtitle translator.\n"
+                    f"Translate the following subtitle lines{from_clause} to {target_lang}.\n"
+                    f"{genre_line}"
+                    "\nGuidelines:\n"
+                    "- Write natural, fluent translations that feel native in the target language\n"
+                    "- Adapt idioms and cultural expressions naturally\n"
+                    "- Keep the [number] prefix on each line exactly as-is\n"
+                    "- Output ONLY the translated lines, no comments or explanations\n\n"
+                    + "\n".join(lines_to_translate)
+                )
+                rc, stdout, stderr = -1, "", ""
+                for attempt in range(1, MAX_RETRY + 2):
+                    rc, stdout, stderr = run_translate_prompt_ollama(model_name, retry_prompt)
+                    if rc == 0 and stdout.strip():
+                        break
+                    if attempt <= MAX_RETRY:
+                        wait = attempt * 5
+                        print(f" retry {attempt}/{MAX_RETRY}...", end="", flush=True)
+                        time.sleep(wait)
+
+                if rc != 0 or not stdout.strip():
+                    print(f" FAILED")
+                    continue
+
+                rb_translated = {}
+                for line in stdout.strip().split("\n"):
+                    m = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                    if m:
+                        rb_translated[m.group(1)] = m.group(2)
+                matched = sum(1 for idx, _, _ in rb if idx in rb_translated)
+                print(f" OK ({matched}/{len(rb)})")
+                if matched > 0:
+                    with open(rb_cache, "w", encoding="utf-8") as f:
+                        for idx, _, _ in rb:
+                            f.write(f"[{idx}] {rb_translated.get(idx, '')}\n")
+                    for idx, ts, text in rb:
+                        if idx in rb_translated:
+                            trans_map[idx] = rb_translated[idx]
+                            source_map[idx] = "llm_retry"
+
+            translated_blocks = [(idx, ts, trans_map.get(idx, txt)) for idx, ts, txt in blocks]
+
+        except Exception as e:
+            print(f"  [NLLB] Error: {e}")
+
+    # Write output
+    final_blocks = []
+    for idx, ts, text in translated_blocks:
+        final_blocks.append((idx, ts, wrap_translated_line(text)))
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        for idx, ts, text in final_blocks:
+            f.write(f"{idx}\n{ts}\n{text}\n\n")
+
+    translated_count = sum(
+        1 for orig, trans in zip(blocks, final_blocks)
+        if orig[2] != trans[2]
+    )
+
+    if translated_count == total:
+        import shutil as _shutil
+        _shutil.rmtree(tmp_dir, ignore_errors=True)
+        print(f"  [OK] Temp folder removed")
+        exit_code = 0
+    elif translated_count > 0:
+        print(f"  [!] Partial translation — temp folder kept for resume: {tmp_dir}")
+        exit_code = 2
+    else:
+        print(f"  [!] Temp folder kept for debugging: {tmp_dir}")
+        print(f"      Check *_raw.txt files to see engine output")
+        exit_code = 1
+
+    # Quality report
+    llm_c      = sum(1 for v in source_map.values() if v == "llm")
+    nllb_c     = sum(1 for v in source_map.values() if v == "nllb")
+    retry_c    = sum(1 for v in source_map.values() if v == "llm_retry")
+    fallback_c = sum(1 for v in source_map.values() if v == "nllb_fallback")
+    untrans_c  = total - translated_count
+    parts = []
+    if llm_c:      parts.append(f"LLM: {llm_c}")
+    if nllb_c:     parts.append(f"NLLB: {nllb_c}")
+    if retry_c:    parts.append(f"Retry: {retry_c}")
+    if fallback_c: parts.append(f"Fallback: {fallback_c}")
+    if untrans_c:  parts.append(f"Untranslated: {untrans_c}")
+    if parts:
+        print(f"  [Report] " + "  |  ".join(parts))
+
+    issues = detect_artifacts(final_blocks, source_lang)
+    if issues:
+        print(f"  [Warn] {len(issues)} issue(s) detected: " + " | ".join(issues[:5]))
+        if len(issues) > 5:
+            print(f"         ...and {len(issues) - 5} more")
+
+    shown = 0
+    for orig, trans in zip(blocks, final_blocks):
+        if orig[2] != trans[2] and shown < 5:
+            if shown == 0:
+                print(f"\n  [Preview]")
+            preview = trans[2][:70] + ("..." if len(trans[2]) > 70 else "")
+            print(f"    [{trans[0]}] {preview}")
+            shown += 1
+
+    print(f"  [DONE] {translated_count}/{total} segments translated")
+    print(f"  Saved  : {output_path}")
+    return exit_code
+
+
+# ---------------------------------------------------------------------------
 # Main translation function (Gemini primary + NLLB second pass)
 # ---------------------------------------------------------------------------
 def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
@@ -544,6 +1067,10 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
     # NLLB-only mode
     if engine_type == "nllb":
         return _translate_nllb_only(srt_path, output_path, target_lang, source_lang, script_dir)
+
+    # Ollama offline LLM mode
+    if engine_type == "ollama":
+        return _translate_ollama(srt_path, output_path, target_lang, source_lang, script_dir, engine_cmd)
 
     # Gemini primary mode
     engine_cmd = resolve_cmd(engine_cmd)
@@ -561,6 +1088,19 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
 
     tmp_dir = output_path + "_tmp"
     os.makedirs(tmp_dir, exist_ok=True)
+
+    # Save/restore language settings in tmp (for resume consistency and debugging)
+    _src_file = os.path.join(tmp_dir, "source_lang.txt")
+    _tgt_file = os.path.join(tmp_dir, "target_lang.txt")
+    if source_lang and not os.path.exists(_src_file):
+        with open(_src_file, "w", encoding="utf-8") as f:
+            f.write(source_lang)
+    elif not source_lang and os.path.exists(_src_file):
+        with open(_src_file, "r", encoding="utf-8") as f:
+            source_lang = f.read().strip()
+    if not os.path.exists(_tgt_file):
+        with open(_tgt_file, "w", encoding="utf-8") as f:
+            f.write(target_lang)
 
     # Genre detection (cached in tmp_dir)
     genre_cache_file = os.path.join(tmp_dir, "genre.txt")
@@ -756,8 +1296,12 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
 
     # -----------------------------------------------------------------------
     # Second pass: NLLB fills segments Gemini couldn't translate
+    # Also catch segments where Gemini returned text but still in source language
     # -----------------------------------------------------------------------
-    untranslated = [orig for orig, trans in zip(blocks, translated_blocks) if orig[2] == trans[2]]
+    untranslated = [
+        orig for orig, trans in zip(blocks, translated_blocks)
+        if orig[2] == trans[2] or still_in_source_lang(trans[2], source_lang)
+    ]
     if untranslated:
         print(f"  [+] Second pass: {len(untranslated)} untranslated segment(s)")
         nllb_count = 0
