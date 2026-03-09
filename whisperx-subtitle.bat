@@ -759,8 +759,92 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
 )
 echo.
-call :CHOOSE_MODEL
-call :CHOOSE_LANGUAGE
+set "WX_CACHE=%USERPROFILE%\.cache\huggingface\hub"
+set "M1=tiny"
+set "M2=base"
+set "M3=small"
+set "M4=medium"
+set "M5=large-v1"
+set "M6=large-v2"
+set "M7=large-v3"
+set "M8=large-v3-turbo"
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "ST_%%i=          "
+    if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "ST_%%i=[downloaded]"
+)
+
+echo  Select model:
+echo  -----------------------------------------------------------
+echo   [1] tiny              ~75 MB    !ST_1!
+echo   [2] base             ~145 MB    !ST_2!
+echo   [3] small            ~466 MB    !ST_3!
+echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
+echo   [5] large-v1         ~3.0 GB    !ST_5!
+echo   [6] large-v2         ~3.0 GB    !ST_6!
+echo   [7] large-v3         ~3.0 GB    !ST_7!
+echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
+echo  -----------------------------------------------------------
+echo.
+set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
+
+if "!MODEL_CHOICE!"=="1" set MODEL=tiny
+if "!MODEL_CHOICE!"=="2" set MODEL=base
+if "!MODEL_CHOICE!"=="3" set MODEL=small
+if "!MODEL_CHOICE!"=="4" set MODEL=medium
+if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
+if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
+if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
+if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
+if "!MODEL_CHOICE!"==""  set MODEL=medium
+
+echo.
+echo  Source language of the video:
+echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
+echo   [2] Japanese
+echo   [3] Korean
+echo   [4] Chinese (Mandarin)
+echo   [5] Cantonese
+echo   [6] Indonesian
+echo   [7] English
+echo   [8] Other (type manually)
+echo.
+set /p LANG_CHOICE="Choose language [1-8, default=1]: "
+
+if "!LANG_CHOICE!"=="1" set LANGUAGE=
+if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
+if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
+if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
+if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
+if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
+if "!LANG_CHOICE!"=="7" set LANGUAGE=English
+if "!LANG_CHOICE!"=="8" (
+    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
+)
+if "!LANG_CHOICE!"==""  set LANGUAGE=
+
+echo.
+echo  Output format:
+echo   [1] srt  - most compatible   [DEFAULT]
+echo   [2] vtt  - for web
+echo   [3] txt  - plain text without timestamps
+echo   [4] all  - generate all formats
+echo.
+set /p FMT_CHOICE="Choose format [1-4, default=1]: "
+
+if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
+if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
+if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
+if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
+if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
+
+set "SRT_LANG=unknown"
+if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
+if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
+if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
+if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
+
 call :CHOOSE_TARGET_LANG
 echo.
 echo ============================================================

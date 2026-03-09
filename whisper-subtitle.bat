@@ -746,8 +746,75 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
 )
 echo.
-call :CHOOSE_MODEL
-call :CHOOSE_LANGUAGE
+echo   [1] tiny           - fastest, lower accuracy         ^| ~1GB  VRAM
+echo   [2] base           - fast, decent accuracy           ^| ~1GB  VRAM
+echo   [3] small          - balanced                        ^| ~2GB  VRAM
+echo   [4] medium         - good accuracy        [DEFAULT]  ^| ~5GB  VRAM
+echo   [5] large-v1       - high accuracy                   ^| ~10GB VRAM
+echo   [6] large-v2       - better than v1                  ^| ~10GB VRAM
+echo   [7] large-v3       - best official accuracy          ^| ~10GB VRAM
+echo   [8] large-v3-turbo - fast, near v3 quality           ^| ~6GB  VRAM
+echo.
+set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
+
+if "!MODEL_CHOICE!"=="1" set MODEL=tiny
+if "!MODEL_CHOICE!"=="2" set MODEL=base
+if "!MODEL_CHOICE!"=="3" set MODEL=small
+if "!MODEL_CHOICE!"=="4" set MODEL=medium
+if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
+if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
+if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
+if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
+if "!MODEL_CHOICE!"==""  set MODEL=medium
+
+echo.
+echo  Source language of the video:
+echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
+echo   [2] Japanese
+echo   [3] Korean
+echo   [4] Chinese (Mandarin)
+echo   [5] Cantonese
+echo   [6] Indonesian
+echo   [7] English
+echo   [8] Other (type manually)
+echo.
+set /p LANG_CHOICE="Choose language [1-8, default=1]: "
+
+if "!LANG_CHOICE!"=="1" set LANGUAGE=
+if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
+if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
+if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
+if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
+if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
+if "!LANG_CHOICE!"=="7" set LANGUAGE=English
+if "!LANG_CHOICE!"=="8" (
+    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
+)
+if "!LANG_CHOICE!"==""  set LANGUAGE=
+
+echo.
+echo  Output format:
+echo   [1] srt  - most compatible   [DEFAULT]
+echo   [2] vtt  - for web
+echo   [3] txt  - plain text without timestamps
+echo   [4] all  - generate all formats
+echo.
+set /p FMT_CHOICE="Choose format [1-4, default=1]: "
+
+if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
+if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
+if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
+if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
+if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
+
+set "SRT_LANG=unknown"
+if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
+if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
+if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
+if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
+
 call :CHOOSE_TARGET_LANG
 echo.
 echo ============================================================
