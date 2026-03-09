@@ -260,21 +260,27 @@ def build_batches(blocks, max_tokens=200, min_tokens_for_break=100):
 def still_in_source_lang(text, source_lang):
     """Return True if text still appears to be in the source language
     (i.e. translation failed / was skipped by the LLM).
-    Handles ja, ko, zh; Latin-script languages (en, id) are skipped
-    because reliable per-segment detection is not feasible without
-    an external library.
+    - Non-Latin (ja/ko/zh): fast character-based detection.
+    - Latin-script source (en, id, etc.): uses langdetect for segments
+      with 4+ words. Falls back gracefully if langdetect not installed.
     """
     if not source_lang or not text:
         return False
+    # Non-Latin: fast character-based detection (always available)
     if source_lang == 'ja':
-        # hiragana or katakana present → definitely still Japanese
         return bool(re.search(r'[\u3040-\u30ff]', text))
     if source_lang == 'ko':
         return bool(re.search(r'[\uac00-\ud7a3]', text))
     if source_lang == 'zh':
-        # CJK characters present in target text → still Chinese
         return bool(re.search(r'[\u4e00-\u9fff]', text))
-    return False
+    # Latin-script source: use langdetect for segments with enough words
+    if len(text.split()) < 4:
+        return False  # too short for reliable detection
+    try:
+        from langdetect import detect
+        return detect(text) == source_lang
+    except Exception:
+        return False
 
 
 def detect_artifacts(translated_blocks, source_lang=""):

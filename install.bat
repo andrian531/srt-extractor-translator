@@ -431,7 +431,7 @@ goto WX_MODEL_LOOP
 echo.
 echo [5c] NLLB Translation Model ^(offline, local^)
 echo  Used by translate engine as gap-filler when Gemini misses segments.
-echo  Packages: transformers sentencepiece sacremoses accelerate
+echo  Packages: transformers sentencepiece sacremoses accelerate langdetect
 echo.
 
 set "NLLB_PKG_OK=false"
@@ -442,7 +442,7 @@ if not errorlevel 1 (
 ) else (
     set /p INSTALL_NLLB_PKG="  Install NLLB packages? (Y/N, default=Y): "
     if /i not "!INSTALL_NLLB_PKG!"=="N" (
-        pip install transformers sentencepiece sacremoses accelerate
+        pip install transformers sentencepiece sacremoses accelerate langdetect
         if errorlevel 1 (
             echo  [WARN] Some NLLB packages may not have installed correctly
         ) else (
@@ -450,6 +450,20 @@ if not errorlevel 1 (
             set "NLLB_PKG_OK=true"
         )
     )
+)
+
+:: langdetect is needed even if NLLB model download is skipped
+python -c "import langdetect" >nul 2>&1
+if errorlevel 1 (
+    echo  [INFO] Installing langdetect ^(language detection for mixed-language segments^)...
+    pip install langdetect >nul 2>&1
+    if errorlevel 1 (
+        echo  [WARN] langdetect install failed. Latin-script mixed-language detection disabled.
+    ) else (
+        echo  [OK] langdetect installed
+    )
+) else (
+    echo  [OK] langdetect already installed
 )
 
 if "!NLLB_PKG_OK!"=="false" (

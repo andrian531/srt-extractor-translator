@@ -123,7 +123,7 @@ goto CLEANUP
 :UNINSTALL_NLLB
 echo.
 echo  Uninstalling NLLB packages...
-pip uninstall transformers sentencepiece sacremoses accelerate tokenizers -y 2>nul
+pip uninstall transformers sentencepiece sacremoses accelerate tokenizers langdetect -y 2>nul
 echo  [OK] NLLB packages removed
 
 echo.
