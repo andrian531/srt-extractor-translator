@@ -400,6 +400,7 @@ echo.
 
 :: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
+echo  [SRT] = subtitle already exists
 echo ============================================================
 echo.
 
@@ -411,7 +412,9 @@ for /r "%SCRIPT_DIR%" %%f in (
     set "FILE_!IDX!=%%f"
     set "REL=%%f"
     set "REL=!REL:%SCRIPT_DIR%\=!"
-    echo  [!IDX!] !REL!
+    set "SMARK=     "
+    if exist "%%~dpn.srt" set "SMARK=[SRT]"
+    echo  [!IDX!] !SMARK! !REL!
 )
 
 if !IDX!==0 (
@@ -460,14 +463,32 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo ============================================================
 )
 echo.
-echo   [1] tiny           - fastest, lower accuracy         ^| ~1GB  VRAM
-echo   [2] base           - fast, decent accuracy           ^| ~1GB  VRAM
-echo   [3] small          - balanced                        ^| ~2GB  VRAM
-echo   [4] medium         - good accuracy        [DEFAULT]  ^| ~5GB  VRAM
-echo   [5] large-v1       - high accuracy                   ^| ~10GB VRAM
-echo   [6] large-v2       - better than v1                  ^| ~10GB VRAM
-echo   [7] large-v3       - best official accuracy          ^| ~10GB VRAM
-echo   [8] large-v3-turbo - fast, near v3 quality           ^| ~6GB  VRAM
+
+set "WH_CACHE=%USERPROFILE%\.cache\whisper"
+set "M1=tiny"
+set "M2=base"
+set "M3=small"
+set "M4=medium"
+set "M5=large-v1"
+set "M6=large-v2"
+set "M7=large-v3"
+set "M8=large-v3-turbo"
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "ST_%%i=          "
+    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+)
+
+echo  Select model:
+echo  -----------------------------------------------------------
+echo   [1] tiny              ~75 MB    !ST_1!
+echo   [2] base             ~145 MB    !ST_2!
+echo   [3] small            ~466 MB    !ST_3!
+echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
+echo   [5] large-v1         ~3.0 GB    !ST_5!
+echo   [6] large-v2         ~3.0 GB    !ST_6!
+echo   [7] large-v3         ~3.0 GB    !ST_7!
+echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
+echo  -----------------------------------------------------------
 echo.
 set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
 
@@ -542,6 +563,7 @@ if /i "!CHOICE!"=="all" (
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
+echo   Engine  : Whisper
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -700,6 +722,7 @@ echo  [INFO] Gemini is skipped. Translation done offline via LLM + NLLB.
 echo.
 
 echo  Scanning for video files in: %SCRIPT_DIR%
+echo  [SRT] = subtitle already exists
 echo ============================================================
 echo.
 
@@ -711,7 +734,9 @@ for /r "%SCRIPT_DIR%" %%f in (
     set "FILE_!IDX!=%%f"
     set "REL=%%f"
     set "REL=!REL:%SCRIPT_DIR%\=!"
-    echo  [!IDX!] !REL!
+    set "SMARK=     "
+    if exist "%%~dpn.srt" set "SMARK=[SRT]"
+    echo  [!IDX!] !SMARK! !REL!
 )
 
 if !IDX!==0 (
@@ -753,14 +778,32 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
 )
 echo.
-echo   [1] tiny           - fastest, lower accuracy         ^| ~1GB  VRAM
-echo   [2] base           - fast, decent accuracy           ^| ~1GB  VRAM
-echo   [3] small          - balanced                        ^| ~2GB  VRAM
-echo   [4] medium         - good accuracy        [DEFAULT]  ^| ~5GB  VRAM
-echo   [5] large-v1       - high accuracy                   ^| ~10GB VRAM
-echo   [6] large-v2       - better than v1                  ^| ~10GB VRAM
-echo   [7] large-v3       - best official accuracy          ^| ~10GB VRAM
-echo   [8] large-v3-turbo - fast, near v3 quality           ^| ~6GB  VRAM
+
+set "WH_CACHE=%USERPROFILE%\.cache\whisper"
+set "M1=tiny"
+set "M2=base"
+set "M3=small"
+set "M4=medium"
+set "M5=large-v1"
+set "M6=large-v2"
+set "M7=large-v3"
+set "M8=large-v3-turbo"
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "ST_%%i=          "
+    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+)
+
+echo  Select model:
+echo  -----------------------------------------------------------
+echo   [1] tiny              ~75 MB    !ST_1!
+echo   [2] base             ~145 MB    !ST_2!
+echo   [3] small            ~466 MB    !ST_3!
+echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
+echo   [5] large-v1         ~3.0 GB    !ST_5!
+echo   [6] large-v2         ~3.0 GB    !ST_6!
+echo   [7] large-v3         ~3.0 GB    !ST_7!
+echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
+echo  -----------------------------------------------------------
 echo.
 set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
 
@@ -827,6 +870,7 @@ echo.
 echo ============================================================
 echo   SUMMARY
 echo ============================================================
+echo   Engine  : Whisper
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -878,6 +922,7 @@ if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
 
 :: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
+echo  [SRT] = subtitle already exists
 echo ============================================================
 echo.
 
@@ -889,7 +934,9 @@ for /r "%SCRIPT_DIR%" %%f in (
     set "FILE_!IDX!=%%f"
     set "REL=%%f"
     set "REL=!REL:%SCRIPT_DIR%\=!"
-    echo  [!IDX!] !REL!
+    set "SMARK=     "
+    if exist "%%~dpn.srt" set "SMARK=[SRT]"
+    echo  [!IDX!] !SMARK! !REL!
 )
 
 if !IDX!==0 (
@@ -938,14 +985,32 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo ============================================================
 )
 echo.
-echo   [1] tiny           - fastest, lower accuracy         ^| ~1GB  VRAM
-echo   [2] base           - fast, decent accuracy           ^| ~1GB  VRAM
-echo   [3] small          - balanced                        ^| ~2GB  VRAM
-echo   [4] medium         - good accuracy        [DEFAULT]  ^| ~5GB  VRAM
-echo   [5] large-v1       - high accuracy                   ^| ~10GB VRAM
-echo   [6] large-v2       - better than v1                  ^| ~10GB VRAM
-echo   [7] large-v3       - best official accuracy          ^| ~10GB VRAM
-echo   [8] large-v3-turbo - fast, near v3 quality           ^| ~6GB  VRAM
+
+set "WH_CACHE=%USERPROFILE%\.cache\whisper"
+set "M1=tiny"
+set "M2=base"
+set "M3=small"
+set "M4=medium"
+set "M5=large-v1"
+set "M6=large-v2"
+set "M7=large-v3"
+set "M8=large-v3-turbo"
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "ST_%%i=          "
+    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+)
+
+echo  Select model:
+echo  -----------------------------------------------------------
+echo   [1] tiny              ~75 MB    !ST_1!
+echo   [2] base             ~145 MB    !ST_2!
+echo   [3] small            ~466 MB    !ST_3!
+echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
+echo   [5] large-v1         ~3.0 GB    !ST_5!
+echo   [6] large-v2         ~3.0 GB    !ST_6!
+echo   [7] large-v3         ~3.0 GB    !ST_7!
+echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
+echo  -----------------------------------------------------------
 echo.
 set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
 
@@ -1020,6 +1085,7 @@ if /i "!CHOICE!"=="all" (
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
+echo   Engine  : Whisper
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -1063,6 +1129,7 @@ echo.
 
 :: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
+echo  [SRT] = subtitle already exists
 echo ============================================================
 echo.
 
@@ -1074,7 +1141,9 @@ for /r "%SCRIPT_DIR%" %%f in (
     set "FILE_!IDX!=%%f"
     set "REL=%%f"
     set "REL=!REL:%SCRIPT_DIR%\=!"
-    echo  [!IDX!] !REL!
+    set "SMARK=     "
+    if exist "%%~dpn.srt" set "SMARK=[SRT]"
+    echo  [!IDX!] !SMARK! !REL!
 )
 
 if !IDX!==0 (
@@ -1123,14 +1192,32 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo ============================================================
 )
 echo.
-echo   [1] tiny           - fastest, lower accuracy         ^| ~1GB  VRAM
-echo   [2] base           - fast, decent accuracy           ^| ~1GB  VRAM
-echo   [3] small          - balanced                        ^| ~2GB  VRAM
-echo   [4] medium         - good accuracy        [DEFAULT]  ^| ~5GB  VRAM
-echo   [5] large-v1       - high accuracy                   ^| ~10GB VRAM
-echo   [6] large-v2       - better than v1                  ^| ~10GB VRAM
-echo   [7] large-v3       - best official accuracy          ^| ~10GB VRAM
-echo   [8] large-v3-turbo - fast, near v3 quality           ^| ~6GB  VRAM
+
+set "WH_CACHE=%USERPROFILE%\.cache\whisper"
+set "M1=tiny"
+set "M2=base"
+set "M3=small"
+set "M4=medium"
+set "M5=large-v1"
+set "M6=large-v2"
+set "M7=large-v3"
+set "M8=large-v3-turbo"
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "ST_%%i=          "
+    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+)
+
+echo  Select model:
+echo  -----------------------------------------------------------
+echo   [1] tiny              ~75 MB    !ST_1!
+echo   [2] base             ~145 MB    !ST_2!
+echo   [3] small            ~466 MB    !ST_3!
+echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
+echo   [5] large-v1         ~3.0 GB    !ST_5!
+echo   [6] large-v2         ~3.0 GB    !ST_6!
+echo   [7] large-v3         ~3.0 GB    !ST_7!
+echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
+echo  -----------------------------------------------------------
 echo.
 set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
 
@@ -1193,6 +1280,7 @@ if /i "!CHOICE!"=="all" (
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
+echo   Engine  : Whisper
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -1231,6 +1319,7 @@ set "FILE_DIR=%FILE_DIR:~0,-1%"
 echo.
 echo  Processing : %~nx1
 echo  Output to  : %FILE_DIR%
+echo  Engine     : Whisper
 echo  Model      : %MODEL%
 echo  Device     : %WHISPER_DEVICE%
 echo  --------------------------------------------------------
