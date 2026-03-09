@@ -589,8 +589,9 @@ if "!OLLAMA_AVAILABLE!"=="false" (
     echo.
     goto RETURN_OR_QUIT
 )
+call :CHOOSE_OLLAMA_MODEL
 if "!OLLAMA_MODEL!"=="none" (
-    echo  [ERROR] No Offline LLM model configured. Run install.bat and select a model.
+    echo  [ERROR] No Ollama models found. Pull a model first: ollama pull qwen2.5:7b
     echo.
     goto RETURN_OR_QUIT
 )
@@ -684,7 +685,13 @@ if "!OLLAMA_AVAILABLE!"=="false" (
     echo.
 )
 if "!OLLAMA_AVAILABLE!"=="true" (
-    echo  [OK] Offline LLM : !OLLAMA_MODEL!
+    call :CHOOSE_OLLAMA_MODEL
+    if "!OLLAMA_MODEL!"=="none" (
+        echo  [WARN] No Ollama models found. Pull a model first: ollama pull qwen2.5:7b
+        echo.
+    ) else (
+        echo  [OK] Offline LLM : !OLLAMA_MODEL!
+    )
 )
 if "!NLLB_AVAILABLE!"=="true" (
     echo  [OK] NLLB        : installed ^(fills untranslated gaps^)
@@ -1464,6 +1471,46 @@ if "!OLLAMA_MODEL!"=="none" (
 echo  [*] Translating offline with !OLLAMA_MODEL! ^(+ NLLB for gaps^)...
 python "%~dp0translate_srt.py" "!TRANS_FILE!" "!OLLAMA_MODEL!" "ollama" "!TARGET_LANG!"
 goto :eof
+
+:: ============================================================
+:: SUBROUTINE: Choose Ollama model from installed models
+:: Output: OLLAMA_MODEL (set to selected model name, or "none" if not found)
+:: ============================================================
+:CHOOSE_OLLAMA_MODEL
+set "OLL_IDX=0"
+for /f "skip=1 tokens=1" %%m in ('ollama list 2^>nul') do (
+    if not "%%m"=="" (
+        set /a OLL_IDX+=1
+        set "OLL_M_!OLL_IDX!=%%m"
+    )
+)
+if !OLL_IDX!==0 (
+    set "OLLAMA_MODEL=none"
+    goto :eof
+)
+if !OLL_IDX!==1 (
+    set "OLLAMA_MODEL=!OLL_M_1!"
+    goto :eof
+)
+echo.
+echo  Select Ollama model:
+echo.
+for /l %%i in (1,1,!OLL_IDX!) do (
+    echo   [%%i] !OLL_M_%%i!
+)
+echo.
+:OLL_SEL_PROMPT
+set "OLL_CHOICE="
+set /p OLL_CHOICE="Choose model [1-!OLL_IDX!]: "
+if "!OLL_CHOICE!"=="" goto OLL_SEL_PROMPT
+set /a OLL_TEST=!OLL_CHOICE! 2>nul
+if !OLL_TEST! LSS 1 goto OLL_SEL_INVALID
+if !OLL_TEST! GTR !OLL_IDX! goto OLL_SEL_INVALID
+set "OLLAMA_MODEL=!OLL_M_%OLL_CHOICE%!"
+goto :eof
+:OLL_SEL_INVALID
+echo  [!] Invalid choice
+goto OLL_SEL_PROMPT
 
 :: ============================================================
 :: SUBROUTINE: Get video duration via ffprobe
