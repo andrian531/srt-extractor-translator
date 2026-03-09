@@ -179,10 +179,12 @@ echo.
 
 :CHOOSE_SRT
 set "SCHOICE="
-set /p SCHOICE="Enter file number (1-!SIDX!) or 'all': "
+set /p SCHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
 
 if /i "!SCHOICE!"=="all" goto TRANSLATE_ALL_FILES
 if "!SCHOICE!"=="" goto CHOOSE_SRT
+echo !SCHOICE! | findstr "," >nul
+if not errorlevel 1 goto TRANSLATE_MULTI
 set /a STEST=!SCHOICE! 2>nul
 if !STEST! LSS 1 goto INVALID_SRT
 if !STEST! GTR !SIDX! goto INVALID_SRT
@@ -197,6 +199,20 @@ goto TRANSLATE_DONE
 :INVALID_SRT
 echo  [!] Invalid input
 goto CHOOSE_SRT
+
+:TRANSLATE_MULTI
+set "DETECT_FILE=!SFILE_1!"
+call :DETECT_SRT_LANG
+call :CHOOSE_TARGET_LANG
+echo.
+for %%c in (!SCHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
+        echo  [*] Translating: !SFILE_%%c!
+        call :RUN_TRANSLATE "!SFILE_%%c!"
+    )
+)
+goto TRANSLATE_DONE
 
 :TRANSLATE_ALL_FILES
 set "DETECT_FILE=!SFILE_1!"
@@ -338,10 +354,12 @@ echo.
 
 :OFFLINE_CHOOSE_SRT
 set "SCHOICE="
-set /p SCHOICE="Enter file number (1-!SIDX!) or 'all': "
+set /p SCHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
 
 if /i "!SCHOICE!"=="all" goto OFFLINE_TRANSLATE_ALL
 if "!SCHOICE!"=="" goto OFFLINE_CHOOSE_SRT
+echo !SCHOICE! | findstr "," >nul
+if not errorlevel 1 goto OFFLINE_TRANSLATE_MULTI
 set /a STEST=!SCHOICE! 2>nul
 if !STEST! LSS 1 goto OFFLINE_INVALID_SRT
 if !STEST! GTR !SIDX! goto OFFLINE_INVALID_SRT
@@ -356,6 +374,20 @@ goto OFFLINE_TRANSLATE_DONE
 :OFFLINE_INVALID_SRT
 echo  [!] Invalid input
 goto OFFLINE_CHOOSE_SRT
+
+:OFFLINE_TRANSLATE_MULTI
+set "DETECT_FILE=!SFILE_1!"
+call :DETECT_SRT_LANG
+call :CHOOSE_TARGET_LANG
+echo.
+for %%c in (!SCHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
+        echo  [*] Translating: !SFILE_%%c!
+        call :RUN_TRANSLATE_OFFLINE "!SFILE_%%c!"
+    )
+)
+goto OFFLINE_TRANSLATE_DONE
 
 :OFFLINE_TRANSLATE_ALL
 set "DETECT_FILE=!SFILE_1!"
@@ -423,10 +455,12 @@ echo.
 
 :GTO_CHOOSE_FILE
 set "CHOICE="
-set /p CHOICE="Enter file number (1-!IDX!) or 'all': "
+set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
 
 if /i "!CHOICE!"=="all" goto GTO_CHOOSE_OPTIONS
 if "!CHOICE!"=="" goto GTO_CHOOSE_FILE
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 goto GTO_CHOOSE_OPTIONS
 set /a TEST_CHOICE=!CHOICE! 2>nul
 if !TEST_CHOICE! LSS 1 goto GTO_INVALID_CHOICE
 if !TEST_CHOICE! GTR !IDX! goto GTO_INVALID_CHOICE
@@ -439,7 +473,10 @@ goto GTO_CHOOSE_FILE
 :GTO_CHOOSE_OPTIONS
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
-if /i not "!CHOICE!"=="all" (
+set "IS_MULTI=false"
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 set "IS_MULTI=true"
+if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
     set "VIDEO_FILE=!FILE_%CHOICE%!"
     call :GET_VIDEO_DURATION
 )
@@ -551,6 +588,8 @@ echo ============================================================
 echo   SUMMARY:
 if /i "!CHOICE!"=="all" (
     echo   Files   : ALL !IDX! files
+) else if "!IS_MULTI!"=="true" (
+    echo   Files   : !CHOICE!
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
@@ -573,9 +612,21 @@ set "AUTO_TRANSLATE=true"
 set "OFFLINE_TRANSLATE=true"
 
 if /i "!CHOICE!"=="all" goto GTO_PROCESS_ALL
+if "!IS_MULTI!"=="true" goto GTO_PROCESS_MULTI
 
 set "TARGET_FILE=!FILE_%CHOICE%!"
 call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GTO_PROCESS_MULTI
+for %%c in (!CHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        echo.
+        echo  [*] Processing: !FILE_%%c!
+        call :RUN_WHISPER "!FILE_%%c!"
+    )
+)
 goto DONE
 
 :GTO_PROCESS_ALL
@@ -644,10 +695,12 @@ echo.
 
 :LLM_CHOOSE_SRT
 set "SCHOICE="
-set /p SCHOICE="Enter file number (1-!SIDX!) or 'all': "
+set /p SCHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
 
 if /i "!SCHOICE!"=="all" goto LLM_TRANSLATE_ALL
 if "!SCHOICE!"=="" goto LLM_CHOOSE_SRT
+echo !SCHOICE! | findstr "," >nul
+if not errorlevel 1 goto LLM_TRANSLATE_MULTI
 set /a STEST=!SCHOICE! 2>nul
 if !STEST! LSS 1 goto LLM_INVALID_SRT
 if !STEST! GTR !SIDX! goto LLM_INVALID_SRT
@@ -662,6 +715,20 @@ goto LLM_TRANSLATE_DONE
 :LLM_INVALID_SRT
 echo  [!] Invalid input
 goto LLM_CHOOSE_SRT
+
+:LLM_TRANSLATE_MULTI
+set "DETECT_FILE=!SFILE_1!"
+call :DETECT_SRT_LANG
+call :CHOOSE_TARGET_LANG
+echo.
+for %%c in (!SCHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
+        echo  [*] Translating: !SFILE_%%c!
+        call :RUN_TRANSLATE_OFFLINE_LLM "!SFILE_%%c!"
+    )
+)
+goto LLM_TRANSLATE_DONE
 
 :LLM_TRANSLATE_ALL
 set "DETECT_FILE=!SFILE_1!"
@@ -738,10 +805,12 @@ echo.
 
 :GTL_CHOOSE_FILE
 set "CHOICE="
-set /p CHOICE="Enter file number (1-!IDX!) or 'all': "
+set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
 
 if /i "!CHOICE!"=="all" goto GTL_CHOOSE_OPTIONS
 if "!CHOICE!"=="" goto GTL_CHOOSE_FILE
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 goto GTL_CHOOSE_OPTIONS
 set /a TEST_CHOICE=!CHOICE! 2>nul
 if !TEST_CHOICE! LSS 1 goto GTL_INVALID
 if !TEST_CHOICE! GTR !IDX! goto GTL_INVALID
@@ -754,7 +823,10 @@ goto GTL_CHOOSE_FILE
 :GTL_CHOOSE_OPTIONS
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
-if /i not "!CHOICE!"=="all" (
+set "IS_MULTI=false"
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 set "IS_MULTI=true"
+if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
     set "VIDEO_FILE=!FILE_%CHOICE%!"
     call :GET_VIDEO_DURATION
 )
@@ -857,6 +929,13 @@ echo.
 echo ============================================================
 echo   SUMMARY
 echo ============================================================
+if /i "!CHOICE!"=="all" (
+    echo   Files   : ALL !IDX! files
+) else if "!IS_MULTI!"=="true" (
+    echo   Files   : !CHOICE!
+) else (
+    echo   File    : !FILE_%CHOICE%!
+)
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -875,9 +954,21 @@ set "AUTO_TRANSLATE=true"
 set "OFFLINE_LLM=true"
 
 if /i "!CHOICE!"=="all" goto GTL_PROCESS_ALL
+if "!IS_MULTI!"=="true" goto GTL_PROCESS_MULTI
 
 set "TARGET_FILE=!FILE_%CHOICE%!"
 call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GTL_PROCESS_MULTI
+for %%c in (!CHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        echo.
+        echo  [*] Processing: !FILE_%%c!
+        call :RUN_WHISPER "!FILE_%%c!"
+    )
+)
 goto DONE
 
 :GTL_PROCESS_ALL
@@ -935,10 +1026,12 @@ echo.
 
 :GT_CHOOSE_FILE
 set "CHOICE="
-set /p CHOICE="Enter file number (1-!IDX!) or 'all': "
+set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
 
 if /i "!CHOICE!"=="all" goto GT_CHOOSE_OPTIONS
 if "!CHOICE!"=="" goto GT_CHOOSE_FILE
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 goto GT_CHOOSE_OPTIONS
 set /a TEST_CHOICE=!CHOICE! 2>nul
 if !TEST_CHOICE! LSS 1 goto GT_INVALID_CHOICE
 if !TEST_CHOICE! GTR !IDX! goto GT_INVALID_CHOICE
@@ -951,7 +1044,10 @@ goto GT_CHOOSE_FILE
 :GT_CHOOSE_OPTIONS
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
-if /i not "!CHOICE!"=="all" (
+set "IS_MULTI=false"
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 set "IS_MULTI=true"
+if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
     set "VIDEO_FILE=!FILE_%CHOICE%!"
     call :GET_VIDEO_DURATION
 )
@@ -1063,6 +1159,8 @@ echo ============================================================
 echo   SUMMARY:
 if /i "!CHOICE!"=="all" (
     echo   Files   : ALL !IDX! files
+) else if "!IS_MULTI!"=="true" (
+    echo   Files   : !CHOICE!
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
@@ -1084,9 +1182,21 @@ if /i not "!CONFIRM!"=="Y" goto GT_CHOOSE_FILE
 set "AUTO_TRANSLATE=true"
 
 if /i "!CHOICE!"=="all" goto GT_PROCESS_ALL
+if "!IS_MULTI!"=="true" goto GT_PROCESS_MULTI
 
 set "TARGET_FILE=!FILE_%CHOICE%!"
 call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GT_PROCESS_MULTI
+for %%c in (!CHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        echo.
+        echo  [*] Processing: !FILE_%%c!
+        call :RUN_WHISPER "!FILE_%%c!"
+    )
+)
 goto DONE
 
 :GT_PROCESS_ALL
@@ -1137,10 +1247,12 @@ echo.
 
 :CHOOSE_FILE
 set "CHOICE="
-set /p CHOICE="Enter file number (1-!IDX!) or 'all': "
+set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
 
 if /i "!CHOICE!"=="all" goto CHOOSE_OPTIONS
 if "!CHOICE!"=="" goto CHOOSE_FILE
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 goto CHOOSE_OPTIONS
 set /a TEST_CHOICE=!CHOICE! 2>nul
 if !TEST_CHOICE! LSS 1 goto INVALID_CHOICE
 if !TEST_CHOICE! GTR !IDX! goto INVALID_CHOICE
@@ -1153,7 +1265,10 @@ goto CHOOSE_FILE
 :CHOOSE_OPTIONS
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
-if /i not "!CHOICE!"=="all" (
+set "IS_MULTI=false"
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 set "IS_MULTI=true"
+if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
     set "VIDEO_FILE=!FILE_%CHOICE%!"
     call :GET_VIDEO_DURATION
 )
@@ -1254,7 +1369,9 @@ echo.
 echo ============================================================
 echo   SUMMARY:
 if /i "!CHOICE!"=="all" (
-    echo   File    : ALL !IDX! files
+    echo   Files   : ALL !IDX! files
+) else if "!IS_MULTI!"=="true" (
+    echo   Files   : !CHOICE!
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
@@ -1273,9 +1390,21 @@ set /p CONFIRM="Continue? (Y/N): "
 if /i not "!CONFIRM!"=="Y" goto CHOOSE_FILE
 
 if /i "!CHOICE!"=="all" goto PROCESS_ALL
+if "!IS_MULTI!"=="true" goto PROCESS_MULTI
 
 set "TARGET_FILE=!FILE_%CHOICE%!"
 call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:PROCESS_MULTI
+for %%c in (!CHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        echo.
+        echo  [*] Processing: !FILE_%%c!
+        call :RUN_WHISPER "!FILE_%%c!"
+    )
+)
 goto DONE
 
 :PROCESS_ALL
