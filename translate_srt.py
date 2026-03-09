@@ -1619,6 +1619,7 @@ if __name__ == "__main__":
     forced_engine_cmd  = sys.argv[2] if len(sys.argv) >= 3 else None
     forced_engine_type = sys.argv[3] if len(sys.argv) >= 4 else None
     target_lang        = sys.argv[4] if len(sys.argv) >= 5 else "Indonesian"
+    swap_primary       = len(sys.argv) >= 6 and sys.argv[5].lower() == "swap"
 
     if not os.path.exists(srt_path):
         print(f"[ERROR] File not found: {srt_path}")
@@ -1704,4 +1705,18 @@ if __name__ == "__main__":
     print()
 
     result = translate_subtitles(chosen_cmd, srt_path, output_path, chosen_type, target_lang, detected_lang)
+
+    if swap_primary and result in (True, 0) and os.path.exists(output_path):
+        CODE_SUFFIX = {"en": "_EN", "id": "_ID", "ja": "_JA", "ko": "_KO", "zh": "_ZH"}
+        src_suffix = CODE_SUFFIX.get(detected_lang or "", "_SRC")
+        base = os.path.splitext(srt_path)[0]
+        original_backup = base + src_suffix + ".srt"
+        try:
+            os.rename(srt_path, original_backup)
+            os.rename(output_path, srt_path)
+            print(f"  [swap] Original  → {os.path.basename(original_backup)}")
+            print(f"  [swap] Translated → {os.path.basename(srt_path)}  (primary)")
+        except Exception as e:
+            print(f"  [WARN] Swap rename failed: {e}")
+
     sys.exit(result if isinstance(result, int) else (0 if result else 1))

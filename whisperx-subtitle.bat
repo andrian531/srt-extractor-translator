@@ -16,6 +16,7 @@ set "WHISPER_DEVICE=cpu"
 set "AUTO_TRANSLATE=false"
 set "OFFLINE_TRANSLATE=false"
 set "OFFLINE_LLM=false"
+set "SWAP_PRIMARY=false"
 
 :: ============================================================
 :: QUICK DEPENDENCY CHECK
@@ -99,6 +100,7 @@ if not errorlevel 1 (
 set "AUTO_TRANSLATE=false"
 set "OFFLINE_TRANSLATE=false"
 set "OFFLINE_LLM=false"
+set "SWAP_PRIMARY=false"
 cls
 echo ============================================================
 echo   WHISPERX SUBTITLE EXTRACTOR
@@ -610,6 +612,7 @@ if /i not "!CONFIRM!"=="Y" goto GTO_CHOOSE_FILE
 
 set "AUTO_TRANSLATE=true"
 set "OFFLINE_TRANSLATE=true"
+set "SWAP_PRIMARY=swap"
 
 if /i "!CHOICE!"=="all" goto GTO_PROCESS_ALL
 if "!IS_MULTI!"=="true" goto GTO_PROCESS_MULTI
@@ -952,6 +955,7 @@ if /i not "!CONFIRM!"=="Y" goto GTL_CHOOSE_FILE
 
 set "AUTO_TRANSLATE=true"
 set "OFFLINE_LLM=true"
+set "SWAP_PRIMARY=swap"
 
 if /i "!CHOICE!"=="all" goto GTL_PROCESS_ALL
 if "!IS_MULTI!"=="true" goto GTL_PROCESS_MULTI
@@ -1180,6 +1184,7 @@ set /p CONFIRM="Continue? (Y/N): "
 if /i not "!CONFIRM!"=="Y" goto GT_CHOOSE_FILE
 
 set "AUTO_TRANSLATE=true"
+set "SWAP_PRIMARY=swap"
 
 if /i "!CHOICE!"=="all" goto GT_PROCESS_ALL
 if "!IS_MULTI!"=="true" goto GT_PROCESS_MULTI
@@ -1607,10 +1612,10 @@ if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
 
 if not "!GEMINI_CMD!"=="" (
     echo  [*] Translating with Gemini ^(+ NLLB for gaps^)...
-    python "%~dp0translate_srt.py" "!TRANS_FILE!" "!GEMINI_CMD!" "gemini" "!TARGET_LANG!"
+    python "%~dp0translate_srt.py" "!TRANS_FILE!" "!GEMINI_CMD!" "gemini" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 ) else (
     echo  [*] Gemini not found. Translating with NLLB ^(offline^)...
-    python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!"
+    python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 )
 goto :eof
 
@@ -1628,7 +1633,7 @@ if "!NLLB_AVAILABLE!"=="false" (
 )
 
 echo  [*] Translating offline with NLLB...
-python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!"
+python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 goto :eof
 
 :: ============================================================
@@ -1649,7 +1654,7 @@ if "!OLLAMA_MODEL!"=="none" (
 )
 
 echo  [*] Translating offline with !OLLAMA_MODEL! ^(+ NLLB for gaps^)...
-python "%~dp0translate_srt.py" "!TRANS_FILE!" "!OLLAMA_MODEL!" "ollama" "!TARGET_LANG!"
+python "%~dp0translate_srt.py" "!TRANS_FILE!" "!OLLAMA_MODEL!" "ollama" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 goto :eof
 
 :: ============================================================
