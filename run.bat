@@ -3,7 +3,8 @@ setlocal EnableDelayedExpansion
 chcp 65001 >nul 2>&1
 
 :: ============================================================
-::  WHISPER SUBTITLE EXTRACTOR
+::  SUBTITLE TOOLS - MULTI ENGINE
+::  Supports: Whisper / WhisperX / faster-whisper + stable-ts
 ::  Place this .bat in your video folder and double-click
 :: ============================================================
 
@@ -17,6 +18,7 @@ set "AUTO_TRANSLATE=false"
 set "OFFLINE_TRANSLATE=false"
 set "OFFLINE_LLM=false"
 set "SWAP_PRIMARY=false"
+set "TRANSCRIBE_ENGINE="
 
 :: ============================================================
 :: QUICK DEPENDENCY CHECK
@@ -24,13 +26,6 @@ set "SWAP_PRIMARY=false"
 if not exist "%SCRIPT_DIR%\.installed" (
     echo  [ERROR] Dependencies not installed.
     echo  Please run install.bat first.
-    echo.
-    pause
-    exit /b 1
-)
-where whisper >nul 2>&1
-if errorlevel 1 (
-    echo  [ERROR] Whisper not found. Please run install.bat to reinstall.
     echo.
     pause
     exit /b 1
@@ -44,7 +39,47 @@ if errorlevel 1 (
 )
 
 :: ============================================================
-:: GPU CHECK (quick verify, no install)
+:: TRANSCRIPTION ENGINE DETECTION
+:: ============================================================
+set "WHISPER_INSTALLED=false"
+set "WHISPERX_INSTALLED=false"
+set "FASTER_WHISPER_INSTALLED=false"
+set "STABLE_TS_INSTALLED=false"
+
+where whisper >nul 2>&1
+if not errorlevel 1 set "WHISPER_INSTALLED=true"
+
+where whisperx >nul 2>&1
+if not errorlevel 1 set "WHISPERX_INSTALLED=true"
+
+python -c "import faster_whisper" >nul 2>&1
+if not errorlevel 1 set "FASTER_WHISPER_INSTALLED=true"
+
+python -c "import stable_whisper" >nul 2>&1
+if not errorlevel 1 set "STABLE_TS_INSTALLED=true"
+
+:: At least one transcription engine must be installed
+if "!WHISPER_INSTALLED!"=="false" if "!WHISPERX_INSTALLED!"=="false" if "!FASTER_WHISPER_INSTALLED!"=="false" (
+    echo  [ERROR] No transcription engine found.
+    echo  Please run install.bat to install one of:
+    echo    - Whisper ^(standard OpenAI^)
+    echo    - WhisperX
+    echo    - faster-whisper + stable-ts
+    echo.
+    pause
+    exit /b 1
+)
+
+:: Build engine list label for main menu
+set "ENG_LIST="
+if "!WHISPER_INSTALLED!"=="true"       set "ENG_LIST=!ENG_LIST! Whisper"
+if "!WHISPERX_INSTALLED!"=="true"      set "ENG_LIST=!ENG_LIST! WhisperX"
+if "!FASTER_WHISPER_INSTALLED!"=="true" if "!STABLE_TS_INSTALLED!"=="true" (
+    set "ENG_LIST=!ENG_LIST! faster-whisper+stable-ts"
+)
+
+:: ============================================================
+:: GPU CHECK
 :: ============================================================
 set "CUDA_OK=false"
 set "GPU_DEVICE=cpu"
@@ -54,9 +89,10 @@ for /f "tokens=*" %%L in ('python "%~dp0check_gpu.py" verify 2^>nul') do (
     set "%%L"
 )
 set "WHISPER_DEVICE=!GPU_DEVICE!"
+if "!WHISPER_DEVICE!"=="mps" set "WHISPER_DEVICE=cpu"
 
 :: ============================================================
-:: ENGINE DETECTION (runs once, shared by all menus)
+:: TRANSLATION ENGINE DETECTION (Gemini / NLLB / Ollama)
 :: ============================================================
 set "GEMINI_CMD="
 set "NLLB_AVAILABLE=false"
@@ -102,13 +138,14 @@ set "OFFLINE_LLM=false"
 set "SWAP_PRIMARY=false"
 cls
 echo ============================================================
-echo   WHISPER SUBTITLE EXTRACTOR
+echo   SUBTITLE TOOLS - MULTI ENGINE
 echo   Folder: %SCRIPT_DIR%
 if not "!GPU_DEVICE!"=="cpu" (
-    echo   GPU   : !GPU_NAME! ^(!VRAM!^)
+    echo   GPU    : !GPU_NAME! ^(!VRAM!^)
 ) else (
-    echo   GPU   : CPU mode
+    echo   GPU    : CPU mode
 )
+echo   Engines:!ENG_LIST!
 echo ============================================================
 echo.
 echo   [1] Generate Subtitle            - extract subtitles from video files
@@ -153,7 +190,6 @@ if not "!GEMINI_CMD!"=="" echo  [OK] Gemini : !GEMINI_CMD!
 if "!NLLB_AVAILABLE!"=="true" echo  [OK] NLLB   : offline ^(local model^)
 echo.
 
-:: Scan .srt files (skip already-translated files)
 echo  Scanning for subtitle files (.srt) in: %SCRIPT_DIR%
 echo ============================================================
 echo.
@@ -191,7 +227,6 @@ set /a STEST=!SCHOICE! 2>nul
 if !STEST! LSS 1 goto INVALID_SRT
 if !STEST! GTR !SIDX! goto INVALID_SRT
 
-:: Single file
 set "DETECT_FILE=!SFILE_%SCHOICE%!"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
@@ -218,7 +253,6 @@ for %%c in (!SCHOICE!) do (
 goto TRANSLATE_DONE
 
 :TRANSLATE_ALL_FILES
-:: Detect language from first file, apply to all
 set "DETECT_FILE=!SFILE_1!"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
@@ -331,7 +365,6 @@ echo  [OK] NLLB : offline ^(local model^)
 echo  [INFO] Gemini is skipped. All translation done offline via NLLB.
 echo.
 
-:: Scan .srt files (skip already-translated files)
 echo  Scanning for subtitle files (.srt) in: %SCRIPT_DIR%
 echo ============================================================
 echo.
@@ -369,7 +402,6 @@ set /a STEST=!SCHOICE! 2>nul
 if !STEST! LSS 1 goto OFFLINE_INVALID_SRT
 if !STEST! GTR !SIDX! goto OFFLINE_INVALID_SRT
 
-:: Single file
 set "DETECT_FILE=!SFILE_%SCHOICE%!"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
@@ -412,242 +444,6 @@ echo   Offline translation complete!
 echo ============================================================
 echo.
 goto RETURN_OR_QUIT
-
-:: ============================================================
-:: MENU: GENERATE + TRANSLATE OFFLINE (NLLB only)
-:: ============================================================
-:MENU_GT_OFFLINE
-cls
-echo ============================================================
-echo   GENERATE + TRANSLATE OFFLINE ^(NLLB only^)
-echo   Folder: %SCRIPT_DIR%
-echo ============================================================
-echo.
-
-if "!NLLB_AVAILABLE!"=="false" (
-    echo  [WARN] NLLB not installed. Translation step will be skipped.
-    echo  Install NLLB : pip install transformers sentencepiece sacremoses
-    echo.
-)
-echo  [INFO] Gemini is skipped. Translation done offline via NLLB.
-echo.
-
-:: Scan video files
-echo  Scanning for video files in: %SCRIPT_DIR%
-echo  [SRT] = subtitle already exists
-echo ============================================================
-echo.
-
-set "IDX=0"
-for /r "%SCRIPT_DIR%" %%f in (
-    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
-) do (
-    set /a IDX+=1
-    set "FILE_!IDX!=%%f"
-    set "REL=%%f"
-    set "REL=!REL:%SCRIPT_DIR%\=!"
-    set "SMARK=     "
-    if exist "%%~dpn.srt" set "SMARK=[SRT]"
-    echo  [!IDX!] !SMARK! !REL!
-)
-
-if !IDX!==0 (
-    echo  No video files found in this folder.
-    goto RETURN_OR_QUIT
-)
-
-echo.
-echo  Found: !IDX! video file(s)
-echo.
-
-:GTO_CHOOSE_FILE
-set "CHOICE="
-set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
-
-if /i "!CHOICE!"=="all" goto GTO_CHOOSE_OPTIONS
-if "!CHOICE!"=="" goto GTO_CHOOSE_FILE
-echo !CHOICE! | findstr "," >nul
-if not errorlevel 1 goto GTO_CHOOSE_OPTIONS
-set /a TEST_CHOICE=!CHOICE! 2>nul
-if !TEST_CHOICE! LSS 1 goto GTO_INVALID_CHOICE
-if !TEST_CHOICE! GTR !IDX! goto GTO_INVALID_CHOICE
-goto GTO_CHOOSE_OPTIONS
-
-:GTO_INVALID_CHOICE
-echo  [!] Invalid input
-goto GTO_CHOOSE_FILE
-
-:GTO_CHOOSE_OPTIONS
-:: Get video duration for single file selection
-set "VID_MIN=0"
-set "VID_HHMM=unknown"
-set "IS_MULTI=false"
-echo !CHOICE! | findstr "," >nul
-if not errorlevel 1 set "IS_MULTI=true"
-if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
-    set "VIDEO_FILE=!FILE_%CHOICE%!"
-    call :GET_VIDEO_DURATION
-)
-echo.
-echo ============================================================
-echo   TRANSCRIPTION OPTIONS
-echo ============================================================
-if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
-    echo  Duration : !VID_HHMM!
-    if "!CUDA_OK!"=="false" (
-        if !VID_MIN! GTR 60 echo  [TIP] Long video on CPU -- 'small' for speed, 'medium' for quality
-    ) else (
-        if !VID_MIN! GTR 90 echo  [TIP] Long video -- 'large-v3-turbo' for speed, 'large-v3' for max accuracy
-    )
-    echo ============================================================
-)
-echo.
-
-set "WH_CACHE=%USERPROFILE%\.cache\whisper"
-set "M1=tiny"
-set "M2=base"
-set "M3=small"
-set "M4=medium"
-set "M5=large-v1"
-set "M6=large-v2"
-set "M7=large-v3"
-set "M8=large-v3-turbo"
-for %%i in (1 2 3 4 5 6 7 8) do (
-    set "ST_%%i=          "
-    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
-)
-
-echo  Select model:
-echo  -----------------------------------------------------------
-echo   [1] tiny              ~75 MB    !ST_1!
-echo   [2] base             ~145 MB    !ST_2!
-echo   [3] small            ~466 MB    !ST_3!
-echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
-echo   [5] large-v1         ~3.0 GB    !ST_5!
-echo   [6] large-v2         ~3.0 GB    !ST_6!
-echo   [7] large-v3         ~3.0 GB    !ST_7!
-echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
-echo  -----------------------------------------------------------
-echo.
-set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
-
-if "!MODEL_CHOICE!"=="1" set MODEL=tiny
-if "!MODEL_CHOICE!"=="2" set MODEL=base
-if "!MODEL_CHOICE!"=="3" set MODEL=small
-if "!MODEL_CHOICE!"=="4" set MODEL=medium
-if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
-if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
-if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
-if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
-if "!MODEL_CHOICE!"==""  set MODEL=medium
-
-echo.
-echo  Source language of the video:
-echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
-echo   [2] Japanese
-echo   [3] Korean
-echo   [4] Chinese (Mandarin)
-echo   [5] Cantonese
-echo   [6] Indonesian
-echo   [7] English
-echo   [8] Other (type manually)
-echo.
-set /p LANG_CHOICE="Choose language [1-8, default=1]: "
-
-if "!LANG_CHOICE!"=="1" set LANGUAGE=
-if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
-if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
-if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
-if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
-if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
-if "!LANG_CHOICE!"=="7" set LANGUAGE=English
-if "!LANG_CHOICE!"=="8" (
-    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
-)
-if "!LANG_CHOICE!"==""  set LANGUAGE=
-
-echo.
-echo  Output format:
-echo   [1] srt  - most compatible   [DEFAULT]
-echo   [2] vtt  - for web
-echo   [3] txt  - plain text without timestamps
-echo   [4] all  - generate all formats
-echo.
-set /p FMT_CHOICE="Choose format [1-4, default=1]: "
-
-if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
-if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
-if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
-if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
-if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
-
-:: Set SRT_LANG from source language for smart target exclusion
-set "SRT_LANG=unknown"
-if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
-if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
-if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
-if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
-if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
-if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
-
-:: Ask target language upfront
-call :CHOOSE_TARGET_LANG
-
-:: Summary
-echo.
-echo ============================================================
-echo   SUMMARY:
-if /i "!CHOICE!"=="all" (
-    echo   Files   : ALL !IDX! files
-) else if "!IS_MULTI!"=="true" (
-    echo   Files   : !CHOICE!
-) else (
-    echo   File    : !FILE_%CHOICE%!
-)
-echo   Engine  : Whisper
-echo   Model   : !MODEL!
-if "!LANGUAGE!"=="" (
-    echo   Language: Auto-detect
-) else (
-    echo   Language: !LANGUAGE!
-)
-echo   Device  : !WHISPER_DEVICE!
-echo   Output  : .!OUTPUT_FORMAT!
-echo   Translate to: !TARGET_LANG! ^(NLLB offline^)
-echo ============================================================
-echo.
-set /p CONFIRM="Continue? (Y/N): "
-if /i not "!CONFIRM!"=="Y" goto GTO_CHOOSE_FILE
-
-set "AUTO_TRANSLATE=true"
-set "OFFLINE_TRANSLATE=true"
-set "SWAP_PRIMARY=swap"
-
-if /i "!CHOICE!"=="all" goto GTO_PROCESS_ALL
-if "!IS_MULTI!"=="true" goto GTO_PROCESS_MULTI
-
-set "TARGET_FILE=!FILE_%CHOICE%!"
-call :RUN_WHISPER "!TARGET_FILE!"
-goto DONE
-
-:GTO_PROCESS_MULTI
-for %%c in (!CHOICE!) do (
-    set /a CTEST=%%c 2>nul
-    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
-        echo.
-        echo  [*] Processing: !FILE_%%c!
-        call :RUN_WHISPER "!FILE_%%c!"
-    )
-)
-goto DONE
-
-:GTO_PROCESS_ALL
-for /l %%i in (1,1,!IDX!) do (
-    echo.
-    echo  [%%i/!IDX!] Processing: !FILE_%%i!
-    call :RUN_WHISPER "!FILE_%%i!"
-)
-goto DONE
 
 :: ============================================================
 :: MENU: TRANSLATE OFFLINE (LLM + NLLB)
@@ -702,7 +498,7 @@ if !SIDX!==0 (
 )
 
 echo.
-echo  Found: !SIDX! subtitle file(s^)
+echo  Found: !SIDX! subtitle file(s)
 echo.
 
 :LLM_CHOOSE_SRT
@@ -761,477 +557,6 @@ echo.
 goto RETURN_OR_QUIT
 
 :: ============================================================
-:: MENU: GENERATE + TRANSLATE OFFLINE (LLM + NLLB)
-:: ============================================================
-:MENU_GT_LLM
-cls
-echo ============================================================
-echo   GENERATE + TRANSLATE OFFLINE ^(LLM + NLLB^)
-echo   Folder: %SCRIPT_DIR%
-echo ============================================================
-echo.
-
-if "!OLLAMA_AVAILABLE!"=="false" (
-    echo  [WARN] Ollama not found. Translation step will be skipped.
-    echo  Run install.bat to set up Offline LLM.
-    echo.
-)
-if "!OLLAMA_AVAILABLE!"=="true" (
-    call :CHOOSE_OLLAMA_MODEL
-    if "!OLLAMA_MODEL!"=="none" (
-        echo  [WARN] No Ollama models found. Pull a model first: ollama pull qwen2.5:7b
-        echo.
-    ) else (
-        echo  [OK] Offline LLM : !OLLAMA_MODEL!
-    )
-)
-if "!NLLB_AVAILABLE!"=="true" (
-    echo  [OK] NLLB        : installed ^(fills untranslated gaps^)
-)
-echo  [INFO] Gemini is skipped. Translation done offline via LLM + NLLB.
-echo.
-
-echo  Scanning for video files in: %SCRIPT_DIR%
-echo  [SRT] = subtitle already exists
-echo ============================================================
-echo.
-
-set "IDX=0"
-for /r "%SCRIPT_DIR%" %%f in (
-    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
-) do (
-    set /a IDX+=1
-    set "FILE_!IDX!=%%f"
-    set "REL=%%f"
-    set "REL=!REL:%SCRIPT_DIR%\=!"
-    set "SMARK=     "
-    if exist "%%~dpn.srt" set "SMARK=[SRT]"
-    echo  [!IDX!] !SMARK! !REL!
-)
-
-if !IDX!==0 (
-    echo  No video files found in this folder.
-    goto RETURN_OR_QUIT
-)
-
-echo.
-echo  Found: !IDX! video file(s^)
-echo.
-
-:GTL_CHOOSE_FILE
-set "CHOICE="
-set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
-
-if /i "!CHOICE!"=="all" goto GTL_CHOOSE_OPTIONS
-if "!CHOICE!"=="" goto GTL_CHOOSE_FILE
-echo !CHOICE! | findstr "," >nul
-if not errorlevel 1 goto GTL_CHOOSE_OPTIONS
-set /a TEST_CHOICE=!CHOICE! 2>nul
-if !TEST_CHOICE! LSS 1 goto GTL_INVALID
-if !TEST_CHOICE! GTR !IDX! goto GTL_INVALID
-goto GTL_CHOOSE_OPTIONS
-
-:GTL_INVALID
-echo  [!] Invalid input
-goto GTL_CHOOSE_FILE
-
-:GTL_CHOOSE_OPTIONS
-set "VID_MIN=0"
-set "VID_HHMM=unknown"
-set "IS_MULTI=false"
-echo !CHOICE! | findstr "," >nul
-if not errorlevel 1 set "IS_MULTI=true"
-if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
-    set "VIDEO_FILE=!FILE_%CHOICE%!"
-    call :GET_VIDEO_DURATION
-)
-echo.
-echo ============================================================
-echo   TRANSCRIPTION OPTIONS
-echo ============================================================
-if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
-    echo  Duration : !VID_HHMM!
-)
-echo.
-
-set "WH_CACHE=%USERPROFILE%\.cache\whisper"
-set "M1=tiny"
-set "M2=base"
-set "M3=small"
-set "M4=medium"
-set "M5=large-v1"
-set "M6=large-v2"
-set "M7=large-v3"
-set "M8=large-v3-turbo"
-for %%i in (1 2 3 4 5 6 7 8) do (
-    set "ST_%%i=          "
-    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
-)
-
-echo  Select model:
-echo  -----------------------------------------------------------
-echo   [1] tiny              ~75 MB    !ST_1!
-echo   [2] base             ~145 MB    !ST_2!
-echo   [3] small            ~466 MB    !ST_3!
-echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
-echo   [5] large-v1         ~3.0 GB    !ST_5!
-echo   [6] large-v2         ~3.0 GB    !ST_6!
-echo   [7] large-v3         ~3.0 GB    !ST_7!
-echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
-echo  -----------------------------------------------------------
-echo.
-set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
-
-if "!MODEL_CHOICE!"=="1" set MODEL=tiny
-if "!MODEL_CHOICE!"=="2" set MODEL=base
-if "!MODEL_CHOICE!"=="3" set MODEL=small
-if "!MODEL_CHOICE!"=="4" set MODEL=medium
-if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
-if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
-if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
-if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
-if "!MODEL_CHOICE!"==""  set MODEL=medium
-
-echo.
-echo  Source language of the video:
-echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
-echo   [2] Japanese
-echo   [3] Korean
-echo   [4] Chinese (Mandarin)
-echo   [5] Cantonese
-echo   [6] Indonesian
-echo   [7] English
-echo   [8] Other (type manually)
-echo.
-set /p LANG_CHOICE="Choose language [1-8, default=1]: "
-
-if "!LANG_CHOICE!"=="1" set LANGUAGE=
-if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
-if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
-if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
-if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
-if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
-if "!LANG_CHOICE!"=="7" set LANGUAGE=English
-if "!LANG_CHOICE!"=="8" (
-    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
-)
-if "!LANG_CHOICE!"==""  set LANGUAGE=
-
-echo.
-echo  Output format:
-echo   [1] srt  - most compatible   [DEFAULT]
-echo   [2] vtt  - for web
-echo   [3] txt  - plain text without timestamps
-echo   [4] all  - generate all formats
-echo.
-set /p FMT_CHOICE="Choose format [1-4, default=1]: "
-
-if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
-if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
-if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
-if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
-if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
-
-set "SRT_LANG=unknown"
-if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
-if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
-if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
-if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
-if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
-if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
-
-call :CHOOSE_TARGET_LANG
-echo.
-echo ============================================================
-echo   SUMMARY
-echo ============================================================
-if /i "!CHOICE!"=="all" (
-    echo   Files   : ALL !IDX! files
-) else if "!IS_MULTI!"=="true" (
-    echo   Files   : !CHOICE!
-) else (
-    echo   File    : !FILE_%CHOICE%!
-)
-echo   Engine  : Whisper
-echo   Model   : !MODEL!
-if "!LANGUAGE!"=="" (
-    echo   Language: Auto-detect
-) else (
-    echo   Language: !LANGUAGE!
-)
-echo   Device  : !WHISPER_DEVICE!
-echo   Output  : .!OUTPUT_FORMAT!
-echo   Translate to: !TARGET_LANG! ^(Offline LLM + NLLB^)
-echo ============================================================
-echo.
-set /p CONFIRM="Continue? (Y/N): "
-if /i not "!CONFIRM!"=="Y" goto GTL_CHOOSE_FILE
-
-set "AUTO_TRANSLATE=true"
-set "OFFLINE_LLM=true"
-set "SWAP_PRIMARY=swap"
-
-if /i "!CHOICE!"=="all" goto GTL_PROCESS_ALL
-if "!IS_MULTI!"=="true" goto GTL_PROCESS_MULTI
-
-set "TARGET_FILE=!FILE_%CHOICE%!"
-call :RUN_WHISPER "!TARGET_FILE!"
-goto DONE
-
-:GTL_PROCESS_MULTI
-for %%c in (!CHOICE!) do (
-    set /a CTEST=%%c 2>nul
-    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
-        echo.
-        echo  [*] Processing: !FILE_%%c!
-        call :RUN_WHISPER "!FILE_%%c!"
-    )
-)
-goto DONE
-
-:GTL_PROCESS_ALL
-for /l %%i in (1,1,!IDX!) do (
-    echo.
-    echo  [%%i/!IDX!] Processing: !FILE_%%i!
-    call :RUN_WHISPER "!FILE_%%i!"
-)
-goto DONE
-
-:: ============================================================
-:: MENU: GENERATE + TRANSLATE (set & forget)
-:: ============================================================
-:MENU_GENERATE_TRANSLATE
-cls
-echo ============================================================
-echo   GENERATE + TRANSLATE
-echo   Folder: %SCRIPT_DIR%
-echo ============================================================
-echo.
-
-if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
-    echo  [WARN] No translation engine found. Translation step will be skipped.
-    echo  Install Gemini : npm install -g @google/gemini-cli
-    echo  Install NLLB   : pip install transformers sentencepiece sacremoses
-    echo.
-)
-
-:: Scan video files
-echo  Scanning for video files in: %SCRIPT_DIR%
-echo  [SRT] = subtitle already exists
-echo ============================================================
-echo.
-
-set "IDX=0"
-for /r "%SCRIPT_DIR%" %%f in (
-    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
-) do (
-    set /a IDX+=1
-    set "FILE_!IDX!=%%f"
-    set "REL=%%f"
-    set "REL=!REL:%SCRIPT_DIR%\=!"
-    set "SMARK=     "
-    if exist "%%~dpn.srt" set "SMARK=[SRT]"
-    echo  [!IDX!] !SMARK! !REL!
-)
-
-if !IDX!==0 (
-    echo  No video files found in this folder.
-    goto RETURN_OR_QUIT
-)
-
-echo.
-echo  Found: !IDX! video file(s)
-echo.
-
-:GT_CHOOSE_FILE
-set "CHOICE="
-set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
-
-if /i "!CHOICE!"=="all" goto GT_CHOOSE_OPTIONS
-if "!CHOICE!"=="" goto GT_CHOOSE_FILE
-echo !CHOICE! | findstr "," >nul
-if not errorlevel 1 goto GT_CHOOSE_OPTIONS
-set /a TEST_CHOICE=!CHOICE! 2>nul
-if !TEST_CHOICE! LSS 1 goto GT_INVALID_CHOICE
-if !TEST_CHOICE! GTR !IDX! goto GT_INVALID_CHOICE
-goto GT_CHOOSE_OPTIONS
-
-:GT_INVALID_CHOICE
-echo  [!] Invalid input
-goto GT_CHOOSE_FILE
-
-:GT_CHOOSE_OPTIONS
-:: Get video duration for single file selection
-set "VID_MIN=0"
-set "VID_HHMM=unknown"
-set "IS_MULTI=false"
-echo !CHOICE! | findstr "," >nul
-if not errorlevel 1 set "IS_MULTI=true"
-if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
-    set "VIDEO_FILE=!FILE_%CHOICE%!"
-    call :GET_VIDEO_DURATION
-)
-echo.
-echo ============================================================
-echo   TRANSCRIPTION OPTIONS
-echo ============================================================
-if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
-    echo  Duration : !VID_HHMM!
-    if "!CUDA_OK!"=="false" (
-        if !VID_MIN! GTR 60 echo  [TIP] Long video on CPU -- 'small' for speed, 'medium' for quality
-    ) else (
-        if !VID_MIN! GTR 90 echo  [TIP] Long video -- 'large-v3-turbo' for speed, 'large-v3' for max accuracy
-    )
-    echo ============================================================
-)
-echo.
-
-set "WH_CACHE=%USERPROFILE%\.cache\whisper"
-set "M1=tiny"
-set "M2=base"
-set "M3=small"
-set "M4=medium"
-set "M5=large-v1"
-set "M6=large-v2"
-set "M7=large-v3"
-set "M8=large-v3-turbo"
-for %%i in (1 2 3 4 5 6 7 8) do (
-    set "ST_%%i=          "
-    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
-)
-
-echo  Select model:
-echo  -----------------------------------------------------------
-echo   [1] tiny              ~75 MB    !ST_1!
-echo   [2] base             ~145 MB    !ST_2!
-echo   [3] small            ~466 MB    !ST_3!
-echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
-echo   [5] large-v1         ~3.0 GB    !ST_5!
-echo   [6] large-v2         ~3.0 GB    !ST_6!
-echo   [7] large-v3         ~3.0 GB    !ST_7!
-echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
-echo  -----------------------------------------------------------
-echo.
-set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
-
-if "!MODEL_CHOICE!"=="1" set MODEL=tiny
-if "!MODEL_CHOICE!"=="2" set MODEL=base
-if "!MODEL_CHOICE!"=="3" set MODEL=small
-if "!MODEL_CHOICE!"=="4" set MODEL=medium
-if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
-if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
-if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
-if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
-if "!MODEL_CHOICE!"==""  set MODEL=medium
-
-echo.
-echo  Source language of the video:
-echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
-echo   [2] Japanese
-echo   [3] Korean
-echo   [4] Chinese (Mandarin)
-echo   [5] Cantonese
-echo   [6] Indonesian
-echo   [7] English
-echo   [8] Other (type manually)
-echo.
-set /p LANG_CHOICE="Choose language [1-8, default=1]: "
-
-if "!LANG_CHOICE!"=="1" set LANGUAGE=
-if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
-if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
-if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
-if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
-if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
-if "!LANG_CHOICE!"=="7" set LANGUAGE=English
-if "!LANG_CHOICE!"=="8" (
-    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
-)
-if "!LANG_CHOICE!"==""  set LANGUAGE=
-
-echo.
-echo  Output format:
-echo   [1] srt  - most compatible   [DEFAULT]
-echo   [2] vtt  - for web
-echo   [3] txt  - plain text without timestamps
-echo   [4] all  - generate all formats
-echo.
-set /p FMT_CHOICE="Choose format [1-4, default=1]: "
-
-if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
-if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
-if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
-if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
-if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
-
-:: Set SRT_LANG from source language for smart target exclusion
-set "SRT_LANG=unknown"
-if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
-if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
-if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
-if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
-if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
-if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
-
-:: Ask target language upfront
-call :CHOOSE_TARGET_LANG
-
-:: Summary
-echo.
-echo ============================================================
-echo   SUMMARY:
-if /i "!CHOICE!"=="all" (
-    echo   Files   : ALL !IDX! files
-) else if "!IS_MULTI!"=="true" (
-    echo   Files   : !CHOICE!
-) else (
-    echo   File    : !FILE_%CHOICE%!
-)
-echo   Engine  : Whisper
-echo   Model   : !MODEL!
-if "!LANGUAGE!"=="" (
-    echo   Language: Auto-detect
-) else (
-    echo   Language: !LANGUAGE!
-)
-echo   Device  : !WHISPER_DEVICE!
-echo   Output  : .!OUTPUT_FORMAT!
-echo   Translate to: !TARGET_LANG!
-echo ============================================================
-echo.
-set /p CONFIRM="Continue? (Y/N): "
-if /i not "!CONFIRM!"=="Y" goto GT_CHOOSE_FILE
-
-set "AUTO_TRANSLATE=true"
-set "SWAP_PRIMARY=swap"
-
-if /i "!CHOICE!"=="all" goto GT_PROCESS_ALL
-if "!IS_MULTI!"=="true" goto GT_PROCESS_MULTI
-
-set "TARGET_FILE=!FILE_%CHOICE%!"
-call :RUN_WHISPER "!TARGET_FILE!"
-goto DONE
-
-:GT_PROCESS_MULTI
-for %%c in (!CHOICE!) do (
-    set /a CTEST=%%c 2>nul
-    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
-        echo.
-        echo  [*] Processing: !FILE_%%c!
-        call :RUN_WHISPER "!FILE_%%c!"
-    )
-)
-goto DONE
-
-:GT_PROCESS_ALL
-for /l %%i in (1,1,!IDX!) do (
-    echo.
-    echo  [%%i/!IDX!] Processing: !FILE_%%i!
-    call :RUN_WHISPER "!FILE_%%i!"
-)
-goto DONE
-
-:: ============================================================
 :: MENU: GENERATE SUBTITLE
 :: ============================================================
 :MENU_GENERATE
@@ -1242,7 +567,6 @@ echo   Folder: %SCRIPT_DIR%
 echo ============================================================
 echo.
 
-:: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
 echo  [SRT] = subtitle already exists
 echo ============================================================
@@ -1288,7 +612,6 @@ echo  [!] Invalid input
 goto CHOOSE_FILE
 
 :CHOOSE_OPTIONS
-:: Get video duration for single file selection
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
 set "IS_MULTI=false"
@@ -1300,58 +623,25 @@ if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
 )
 echo.
 echo ============================================================
-echo   TRANSCRIPTION OPTIONS
+echo   STEP 1/3 - SELECT TRANSCRIPTION ENGINE
 echo ============================================================
 if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
-    if "!CUDA_OK!"=="false" (
-        if !VID_MIN! GTR 60 echo  [TIP] Long video on CPU -- 'small' for speed, 'medium' for quality
-    ) else (
-        if !VID_MIN! GTR 90 echo  [TIP] Long video -- 'large-v3-turbo' for speed, 'large-v3' for max accuracy
-    )
-    echo ============================================================
 )
 echo.
-
-set "WH_CACHE=%USERPROFILE%\.cache\whisper"
-set "M1=tiny"
-set "M2=base"
-set "M3=small"
-set "M4=medium"
-set "M5=large-v1"
-set "M6=large-v2"
-set "M7=large-v3"
-set "M8=large-v3-turbo"
-for %%i in (1 2 3 4 5 6 7 8) do (
-    set "ST_%%i=          "
-    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
-)
-
-echo  Select model:
-echo  -----------------------------------------------------------
-echo   [1] tiny              ~75 MB    !ST_1!
-echo   [2] base             ~145 MB    !ST_2!
-echo   [3] small            ~466 MB    !ST_3!
-echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
-echo   [5] large-v1         ~3.0 GB    !ST_5!
-echo   [6] large-v2         ~3.0 GB    !ST_6!
-echo   [7] large-v3         ~3.0 GB    !ST_7!
-echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
-echo  -----------------------------------------------------------
+call :SELECT_TRANSCRIPTION_ENGINE
 echo.
-set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
-
-if "!MODEL_CHOICE!"=="1" set MODEL=tiny
-if "!MODEL_CHOICE!"=="2" set MODEL=base
-if "!MODEL_CHOICE!"=="3" set MODEL=small
-if "!MODEL_CHOICE!"=="4" set MODEL=medium
-if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
-if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
-if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
-if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
-if "!MODEL_CHOICE!"==""  set MODEL=medium
-
+echo ============================================================
+echo   STEP 2/3 - SELECT MODEL
+echo ============================================================
 echo.
+call :SELECT_MODEL
+echo.
+echo ============================================================
+echo   STEP 3/3 - LANGUAGE ^& FORMAT
+echo ============================================================
+echo.
+
 echo  Source language of the video:
 echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
 echo   [2] Japanese
@@ -1381,7 +671,9 @@ echo  Output format:
 echo   [1] srt  - most compatible   [DEFAULT]
 echo   [2] vtt  - for web
 echo   [3] txt  - plain text without timestamps
-echo   [4] all  - generate all formats
+if not "!TRANSCRIBE_ENGINE!"=="faster-whisper" (
+    echo   [4] all  - generate all formats
+)
 echo.
 set /p FMT_CHOICE="Choose format [1-4, default=1]: "
 
@@ -1390,8 +682,8 @@ if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
 if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
 if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
 if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
+if "!TRANSCRIBE_ENGINE!"=="faster-whisper" if "!OUTPUT_FORMAT!"=="all" set OUTPUT_FORMAT=srt
 
-:: Summary
 echo.
 echo ============================================================
 echo   SUMMARY:
@@ -1402,7 +694,7 @@ if /i "!CHOICE!"=="all" (
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
-echo   Engine  : Whisper
+echo   Engine  : !TRANSCRIBE_ENGINE!
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -1443,7 +735,722 @@ for /l %%i in (1,1,!IDX!) do (
 goto DONE
 
 :: ============================================================
-:: SUBROUTINE: Run Whisper on one file
+:: MENU: GENERATE + TRANSLATE (set & forget)
+:: ============================================================
+:MENU_GENERATE_TRANSLATE
+cls
+echo ============================================================
+echo   GENERATE + TRANSLATE
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
+    echo  [WARN] No translation engine found. Translation step will be skipped.
+    echo  Install Gemini : npm install -g @google/gemini-cli
+    echo  Install NLLB   : pip install transformers sentencepiece sacremoses
+    echo.
+)
+
+echo  Scanning for video files in: %SCRIPT_DIR%
+echo  [SRT] = subtitle already exists
+echo ============================================================
+echo.
+
+set "IDX=0"
+for /r "%SCRIPT_DIR%" %%f in (
+    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
+) do (
+    set /a IDX+=1
+    set "FILE_!IDX!=%%f"
+    set "REL=%%f"
+    set "REL=!REL:%SCRIPT_DIR%\=!"
+    set "SMARK=     "
+    if exist "%%~dpn.srt" set "SMARK=[SRT]"
+    echo  [!IDX!] !SMARK! !REL!
+)
+
+if !IDX!==0 (
+    echo  No video files found in this folder.
+    goto RETURN_OR_QUIT
+)
+
+echo.
+echo  Found: !IDX! video file(s)
+echo.
+
+:GT_CHOOSE_FILE
+set "CHOICE="
+set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
+
+if /i "!CHOICE!"=="all" goto GT_CHOOSE_OPTIONS
+if "!CHOICE!"=="" goto GT_CHOOSE_FILE
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 goto GT_CHOOSE_OPTIONS
+set /a TEST_CHOICE=!CHOICE! 2>nul
+if !TEST_CHOICE! LSS 1 goto GT_INVALID_CHOICE
+if !TEST_CHOICE! GTR !IDX! goto GT_INVALID_CHOICE
+goto GT_CHOOSE_OPTIONS
+
+:GT_INVALID_CHOICE
+echo  [!] Invalid input
+goto GT_CHOOSE_FILE
+
+:GT_CHOOSE_OPTIONS
+set "VID_MIN=0"
+set "VID_HHMM=unknown"
+set "IS_MULTI=false"
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 set "IS_MULTI=true"
+if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
+    set "VIDEO_FILE=!FILE_%CHOICE%!"
+    call :GET_VIDEO_DURATION
+)
+echo.
+echo ============================================================
+echo   STEP 1/3 - SELECT TRANSCRIPTION ENGINE
+echo ============================================================
+if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
+    echo  Duration : !VID_HHMM!
+)
+echo.
+call :SELECT_TRANSCRIPTION_ENGINE
+echo.
+echo ============================================================
+echo   STEP 2/3 - SELECT MODEL
+echo ============================================================
+echo.
+call :SELECT_MODEL
+echo.
+echo ============================================================
+echo   STEP 3/3 - LANGUAGE ^& FORMAT
+echo ============================================================
+echo.
+
+echo  Source language of the video:
+echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
+echo   [2] Japanese
+echo   [3] Korean
+echo   [4] Chinese (Mandarin)
+echo   [5] Cantonese
+echo   [6] Indonesian
+echo   [7] English
+echo   [8] Other (type manually)
+echo.
+set /p LANG_CHOICE="Choose language [1-8, default=1]: "
+
+if "!LANG_CHOICE!"=="1" set LANGUAGE=
+if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
+if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
+if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
+if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
+if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
+if "!LANG_CHOICE!"=="7" set LANGUAGE=English
+if "!LANG_CHOICE!"=="8" (
+    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
+)
+if "!LANG_CHOICE!"==""  set LANGUAGE=
+
+echo.
+echo  Output format:
+echo   [1] srt  - most compatible   [DEFAULT]
+echo   [2] vtt  - for web
+echo   [3] txt  - plain text without timestamps
+if not "!TRANSCRIBE_ENGINE!"=="faster-whisper" (
+    echo   [4] all  - generate all formats
+)
+echo.
+set /p FMT_CHOICE="Choose format [1-4, default=1]: "
+
+if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
+if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
+if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
+if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
+if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
+if "!TRANSCRIBE_ENGINE!"=="faster-whisper" if "!OUTPUT_FORMAT!"=="all" set OUTPUT_FORMAT=srt
+
+set "SRT_LANG=unknown"
+if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
+if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
+if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
+if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
+
+call :CHOOSE_TARGET_LANG
+
+echo.
+echo ============================================================
+echo   SUMMARY:
+if /i "!CHOICE!"=="all" (
+    echo   Files   : ALL !IDX! files
+) else if "!IS_MULTI!"=="true" (
+    echo   Files   : !CHOICE!
+) else (
+    echo   File    : !FILE_%CHOICE%!
+)
+echo   Engine  : !TRANSCRIBE_ENGINE!
+echo   Model   : !MODEL!
+if "!LANGUAGE!"=="" (
+    echo   Language: Auto-detect
+) else (
+    echo   Language: !LANGUAGE!
+)
+echo   Device  : !WHISPER_DEVICE!
+echo   Output  : .!OUTPUT_FORMAT!
+echo   Translate to: !TARGET_LANG!
+echo ============================================================
+echo.
+set /p CONFIRM="Continue? (Y/N): "
+if /i not "!CONFIRM!"=="Y" goto GT_CHOOSE_FILE
+
+set "AUTO_TRANSLATE=true"
+set "SWAP_PRIMARY=swap"
+
+if /i "!CHOICE!"=="all" goto GT_PROCESS_ALL
+if "!IS_MULTI!"=="true" goto GT_PROCESS_MULTI
+
+set "TARGET_FILE=!FILE_%CHOICE%!"
+call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GT_PROCESS_MULTI
+for %%c in (!CHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        echo.
+        echo  [*] Processing: !FILE_%%c!
+        call :RUN_WHISPER "!FILE_%%c!"
+    )
+)
+goto DONE
+
+:GT_PROCESS_ALL
+for /l %%i in (1,1,!IDX!) do (
+    echo.
+    echo  [%%i/!IDX!] Processing: !FILE_%%i!
+    call :RUN_WHISPER "!FILE_%%i!"
+)
+goto DONE
+
+:: ============================================================
+:: MENU: GENERATE + TRANSLATE OFFLINE (NLLB only)
+:: ============================================================
+:MENU_GT_OFFLINE
+cls
+echo ============================================================
+echo   GENERATE + TRANSLATE OFFLINE ^(NLLB only^)
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+if "!NLLB_AVAILABLE!"=="false" (
+    echo  [WARN] NLLB not installed. Translation step will be skipped.
+    echo  Install NLLB : pip install transformers sentencepiece sacremoses
+    echo.
+)
+echo  [INFO] Gemini is skipped. Translation done offline via NLLB.
+echo.
+
+echo  Scanning for video files in: %SCRIPT_DIR%
+echo  [SRT] = subtitle already exists
+echo ============================================================
+echo.
+
+set "IDX=0"
+for /r "%SCRIPT_DIR%" %%f in (
+    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
+) do (
+    set /a IDX+=1
+    set "FILE_!IDX!=%%f"
+    set "REL=%%f"
+    set "REL=!REL:%SCRIPT_DIR%\=!"
+    set "SMARK=     "
+    if exist "%%~dpn.srt" set "SMARK=[SRT]"
+    echo  [!IDX!] !SMARK! !REL!
+)
+
+if !IDX!==0 (
+    echo  No video files found in this folder.
+    goto RETURN_OR_QUIT
+)
+
+echo.
+echo  Found: !IDX! video file(s)
+echo.
+
+:GTO_CHOOSE_FILE
+set "CHOICE="
+set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
+
+if /i "!CHOICE!"=="all" goto GTO_CHOOSE_OPTIONS
+if "!CHOICE!"=="" goto GTO_CHOOSE_FILE
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 goto GTO_CHOOSE_OPTIONS
+set /a TEST_CHOICE=!CHOICE! 2>nul
+if !TEST_CHOICE! LSS 1 goto GTO_INVALID_CHOICE
+if !TEST_CHOICE! GTR !IDX! goto GTO_INVALID_CHOICE
+goto GTO_CHOOSE_OPTIONS
+
+:GTO_INVALID_CHOICE
+echo  [!] Invalid input
+goto GTO_CHOOSE_FILE
+
+:GTO_CHOOSE_OPTIONS
+set "VID_MIN=0"
+set "VID_HHMM=unknown"
+set "IS_MULTI=false"
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 set "IS_MULTI=true"
+if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
+    set "VIDEO_FILE=!FILE_%CHOICE%!"
+    call :GET_VIDEO_DURATION
+)
+echo.
+echo ============================================================
+echo   STEP 1/3 - SELECT TRANSCRIPTION ENGINE
+echo ============================================================
+if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
+    echo  Duration : !VID_HHMM!
+)
+echo.
+call :SELECT_TRANSCRIPTION_ENGINE
+echo.
+echo ============================================================
+echo   STEP 2/3 - SELECT MODEL
+echo ============================================================
+echo.
+call :SELECT_MODEL
+echo.
+echo ============================================================
+echo   STEP 3/3 - LANGUAGE ^& FORMAT
+echo ============================================================
+echo.
+
+echo  Source language of the video:
+echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
+echo   [2] Japanese
+echo   [3] Korean
+echo   [4] Chinese (Mandarin)
+echo   [5] Cantonese
+echo   [6] Indonesian
+echo   [7] English
+echo   [8] Other (type manually)
+echo.
+set /p LANG_CHOICE="Choose language [1-8, default=1]: "
+
+if "!LANG_CHOICE!"=="1" set LANGUAGE=
+if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
+if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
+if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
+if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
+if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
+if "!LANG_CHOICE!"=="7" set LANGUAGE=English
+if "!LANG_CHOICE!"=="8" (
+    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
+)
+if "!LANG_CHOICE!"==""  set LANGUAGE=
+
+echo.
+echo  Output format:
+echo   [1] srt  - most compatible   [DEFAULT]
+echo   [2] vtt  - for web
+echo   [3] txt  - plain text without timestamps
+if not "!TRANSCRIBE_ENGINE!"=="faster-whisper" (
+    echo   [4] all  - generate all formats
+)
+echo.
+set /p FMT_CHOICE="Choose format [1-4, default=1]: "
+
+if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
+if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
+if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
+if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
+if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
+if "!TRANSCRIBE_ENGINE!"=="faster-whisper" if "!OUTPUT_FORMAT!"=="all" set OUTPUT_FORMAT=srt
+
+set "SRT_LANG=unknown"
+if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
+if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
+if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
+if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
+
+call :CHOOSE_TARGET_LANG
+
+echo.
+echo ============================================================
+echo   SUMMARY:
+if /i "!CHOICE!"=="all" (
+    echo   Files   : ALL !IDX! files
+) else if "!IS_MULTI!"=="true" (
+    echo   Files   : !CHOICE!
+) else (
+    echo   File    : !FILE_%CHOICE%!
+)
+echo   Engine  : !TRANSCRIBE_ENGINE!
+echo   Model   : !MODEL!
+if "!LANGUAGE!"=="" (
+    echo   Language: Auto-detect
+) else (
+    echo   Language: !LANGUAGE!
+)
+echo   Device  : !WHISPER_DEVICE!
+echo   Output  : .!OUTPUT_FORMAT!
+echo   Translate to: !TARGET_LANG! ^(NLLB offline^)
+echo ============================================================
+echo.
+set /p CONFIRM="Continue? (Y/N): "
+if /i not "!CONFIRM!"=="Y" goto GTO_CHOOSE_FILE
+
+set "AUTO_TRANSLATE=true"
+set "OFFLINE_TRANSLATE=true"
+set "SWAP_PRIMARY=swap"
+
+if /i "!CHOICE!"=="all" goto GTO_PROCESS_ALL
+if "!IS_MULTI!"=="true" goto GTO_PROCESS_MULTI
+
+set "TARGET_FILE=!FILE_%CHOICE%!"
+call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GTO_PROCESS_MULTI
+for %%c in (!CHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        echo.
+        echo  [*] Processing: !FILE_%%c!
+        call :RUN_WHISPER "!FILE_%%c!"
+    )
+)
+goto DONE
+
+:GTO_PROCESS_ALL
+for /l %%i in (1,1,!IDX!) do (
+    echo.
+    echo  [%%i/!IDX!] Processing: !FILE_%%i!
+    call :RUN_WHISPER "!FILE_%%i!"
+)
+goto DONE
+
+:: ============================================================
+:: MENU: GENERATE + TRANSLATE OFFLINE (LLM + NLLB)
+:: ============================================================
+:MENU_GT_LLM
+cls
+echo ============================================================
+echo   GENERATE + TRANSLATE OFFLINE ^(LLM + NLLB^)
+echo   Folder: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+if "!OLLAMA_AVAILABLE!"=="false" (
+    echo  [WARN] Ollama not found. Translation step will be skipped.
+    echo  Run install.bat to set up Offline LLM.
+    echo.
+)
+if "!OLLAMA_AVAILABLE!"=="true" (
+    call :CHOOSE_OLLAMA_MODEL
+    if "!OLLAMA_MODEL!"=="none" (
+        echo  [WARN] No Ollama models found. Pull a model first: ollama pull qwen2.5:7b
+        echo.
+    ) else (
+        echo  [OK] Offline LLM : !OLLAMA_MODEL!
+    )
+)
+if "!NLLB_AVAILABLE!"=="true" (
+    echo  [OK] NLLB        : installed ^(fills untranslated gaps^)
+)
+echo  [INFO] Gemini is skipped. Translation done offline via LLM + NLLB.
+echo.
+
+echo  Scanning for video files in: %SCRIPT_DIR%
+echo ============================================================
+echo.
+
+set "IDX=0"
+for /r "%SCRIPT_DIR%" %%f in (
+    *.mp4 *.mkv *.avi *.mov *.ts *.m4v *.flv *.wmv *.webm *.mpeg *.mpg
+) do (
+    set /a IDX+=1
+    set "FILE_!IDX!=%%f"
+    set "REL=%%f"
+    set "REL=!REL:%SCRIPT_DIR%\=!"
+    echo  [!IDX!] !REL!
+)
+
+if !IDX!==0 (
+    echo  No video files found in this folder.
+    goto RETURN_OR_QUIT
+)
+
+echo.
+echo  Found: !IDX! video file(s)
+echo.
+
+:GTL_CHOOSE_FILE
+set "CHOICE="
+set /p CHOICE="Enter file number(s) (e.g. 1 or 1,3) or 'all': "
+
+if /i "!CHOICE!"=="all" goto GTL_CHOOSE_OPTIONS
+if "!CHOICE!"=="" goto GTL_CHOOSE_FILE
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 goto GTL_CHOOSE_OPTIONS
+set /a TEST_CHOICE=!CHOICE! 2>nul
+if !TEST_CHOICE! LSS 1 goto GTL_INVALID
+if !TEST_CHOICE! GTR !IDX! goto GTL_INVALID
+goto GTL_CHOOSE_OPTIONS
+
+:GTL_INVALID
+echo  [!] Invalid input
+goto GTL_CHOOSE_FILE
+
+:GTL_CHOOSE_OPTIONS
+set "VID_MIN=0"
+set "VID_HHMM=unknown"
+set "IS_MULTI=false"
+echo !CHOICE! | findstr "," >nul
+if not errorlevel 1 set "IS_MULTI=true"
+if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
+    set "VIDEO_FILE=!FILE_%CHOICE%!"
+    call :GET_VIDEO_DURATION
+)
+echo.
+echo ============================================================
+echo   STEP 1/3 - SELECT TRANSCRIPTION ENGINE
+echo ============================================================
+if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
+    echo  Duration : !VID_HHMM!
+)
+echo.
+call :SELECT_TRANSCRIPTION_ENGINE
+echo.
+echo ============================================================
+echo   STEP 2/3 - SELECT MODEL
+echo ============================================================
+echo.
+call :SELECT_MODEL
+echo.
+echo ============================================================
+echo   STEP 3/3 - LANGUAGE ^& FORMAT
+echo ============================================================
+echo.
+
+echo  Source language of the video:
+echo   [1] Auto-detect  (mixed / unsure)   [DEFAULT]
+echo   [2] Japanese
+echo   [3] Korean
+echo   [4] Chinese (Mandarin)
+echo   [5] Cantonese
+echo   [6] Indonesian
+echo   [7] English
+echo   [8] Other (type manually)
+echo.
+set /p LANG_CHOICE="Choose language [1-8, default=1]: "
+
+if "!LANG_CHOICE!"=="1" set LANGUAGE=
+if "!LANG_CHOICE!"=="2" set LANGUAGE=Japanese
+if "!LANG_CHOICE!"=="3" set LANGUAGE=Korean
+if "!LANG_CHOICE!"=="4" set LANGUAGE=Chinese
+if "!LANG_CHOICE!"=="5" set LANGUAGE=Cantonese
+if "!LANG_CHOICE!"=="6" set LANGUAGE=Indonesian
+if "!LANG_CHOICE!"=="7" set LANGUAGE=English
+if "!LANG_CHOICE!"=="8" (
+    set /p LANGUAGE="Enter language name (e.g. Thai, Vietnamese, Arabic): "
+)
+if "!LANG_CHOICE!"==""  set LANGUAGE=
+
+echo.
+echo  Output format:
+echo   [1] srt  - most compatible   [DEFAULT]
+echo   [2] vtt  - for web
+echo   [3] txt  - plain text without timestamps
+if not "!TRANSCRIBE_ENGINE!"=="faster-whisper" (
+    echo   [4] all  - generate all formats
+)
+echo.
+set /p FMT_CHOICE="Choose format [1-4, default=1]: "
+
+if "!FMT_CHOICE!"=="1" set OUTPUT_FORMAT=srt
+if "!FMT_CHOICE!"=="2" set OUTPUT_FORMAT=vtt
+if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
+if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
+if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
+if "!TRANSCRIBE_ENGINE!"=="faster-whisper" if "!OUTPUT_FORMAT!"=="all" set OUTPUT_FORMAT=srt
+
+set "SRT_LANG=unknown"
+if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
+if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
+if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
+if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
+if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
+
+call :CHOOSE_TARGET_LANG
+
+echo.
+echo ============================================================
+echo   SUMMARY:
+if /i "!CHOICE!"=="all" (
+    echo   Files   : ALL !IDX! files
+) else if "!IS_MULTI!"=="true" (
+    echo   Files   : !CHOICE!
+) else (
+    echo   File    : !FILE_%CHOICE%!
+)
+echo   Engine  : !TRANSCRIBE_ENGINE!
+echo   Model   : !MODEL!
+if "!LANGUAGE!"=="" (
+    echo   Language: Auto-detect
+) else (
+    echo   Language: !LANGUAGE!
+)
+echo   Device  : !WHISPER_DEVICE!
+echo   Output  : .!OUTPUT_FORMAT!
+echo   Translate to: !TARGET_LANG! ^(Offline LLM + NLLB^)
+echo ============================================================
+echo.
+set /p CONFIRM="Continue? (Y/N): "
+if /i not "!CONFIRM!"=="Y" goto GTL_CHOOSE_FILE
+
+set "AUTO_TRANSLATE=true"
+set "OFFLINE_LLM=true"
+set "SWAP_PRIMARY=swap"
+
+if /i "!CHOICE!"=="all" goto GTL_PROCESS_ALL
+if "!IS_MULTI!"=="true" goto GTL_PROCESS_MULTI
+
+set "TARGET_FILE=!FILE_%CHOICE%!"
+call :RUN_WHISPER "!TARGET_FILE!"
+goto DONE
+
+:GTL_PROCESS_MULTI
+for %%c in (!CHOICE!) do (
+    set /a CTEST=%%c 2>nul
+    if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        echo.
+        echo  [*] Processing: !FILE_%%c!
+        call :RUN_WHISPER "!FILE_%%c!"
+    )
+)
+goto DONE
+
+:GTL_PROCESS_ALL
+for /l %%i in (1,1,!IDX!) do (
+    echo.
+    echo  [%%i/!IDX!] Processing: !FILE_%%i!
+    call :RUN_WHISPER "!FILE_%%i!"
+)
+goto DONE
+
+:: ============================================================
+:: SUBROUTINE: Select transcription engine
+:: Sets: TRANSCRIBE_ENGINE
+:: ============================================================
+:SELECT_TRANSCRIPTION_ENGINE
+set "TE_COUNT=3"
+set "TE_1=whisper"
+set "TE_2=whisperx"
+set "TE_3=faster-whisper"
+
+set "TE_REC=1"
+if "!FASTER_WHISPER_INSTALLED!"=="true" set "TE_REC=3"
+if "!TE_REC!"=="1" if "!WHISPERX_INSTALLED!"=="true" set "TE_REC=2"
+set "TE_DEFAULT=!TE_REC!"
+
+echo  Available transcription engines:
+echo.
+for /l %%i in (1,1,3) do (
+    set "TE_LABEL="
+    set "TE_STATUS=[Not detected]"
+    if "!TE_%%i!"=="whisper" (
+        set "TE_LABEL=slower, most accurate"
+        if "!WHISPER_INSTALLED!"=="true" set "TE_STATUS=[Installed]"
+    )
+    if "!TE_%%i!"=="whisperx" (
+        set "TE_LABEL=fast, timestamps may drift"
+        if "!WHISPERX_INSTALLED!"=="true" set "TE_STATUS=[Installed]"
+    )
+    if "!TE_%%i!"=="faster-whisper" (
+        set "TE_LABEL=fast, better timestamps (recommended)"
+        if "!FASTER_WHISPER_INSTALLED!"=="true" set "TE_STATUS=[Installed]"
+    )
+    
+    set "DEF_TXT="
+    if "%%i"=="!TE_REC!" set "DEF_TXT= *DEFAULT*"
+    
+    echo   [%%i] !TE_%%i! !TE_STATUS! - !TE_LABEL!!DEF_TXT!
+)
+echo.
+set /p TE_CHOICE="Choose engine [1-3, default=!TE_DEFAULT!]: "
+if "!TE_CHOICE!"=="" set "TE_CHOICE=!TE_DEFAULT!"
+set /a TE_TEST=!TE_CHOICE! 2>nul
+if !TE_TEST! LSS 1 set "TE_CHOICE=!TE_DEFAULT!"
+if !TE_TEST! GTR 3 set "TE_CHOICE=!TE_DEFAULT!"
+set "TRANSCRIBE_ENGINE=!TE_%TE_CHOICE%!"
+echo  Selected: !TRANSCRIBE_ENGINE!
+goto :eof
+
+:: ============================================================
+:: SUBROUTINE: Select model (adapts cache path to engine)
+:: Sets: MODEL
+:: ============================================================
+:SELECT_MODEL
+set "WX_CACHE=%USERPROFILE%\.cache\huggingface\hub"
+set "W_CACHE=%USERPROFILE%\.cache\whisper"
+set "M1=tiny"
+set "M2=base"
+set "M3=small"
+set "M4=medium"
+set "M5=large-v1"
+set "M6=large-v2"
+set "M7=large-v3"
+set "M8=large-v3-turbo"
+
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "ST_%%i=          "
+    if "!TRANSCRIBE_ENGINE!"=="whisper" (
+        if exist "!W_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+    ) else (
+        if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "ST_%%i=[downloaded]"
+    )
+)
+
+if "!CUDA_OK!"=="true" (
+    if !VID_MIN! GTR 90 echo  [TIP] Long video — large-v3-turbo for speed, large-v3 for max accuracy
+) else (
+    if !VID_MIN! GTR 60 echo  [TIP] Long video on CPU — small for speed, medium for quality
+)
+
+echo  Select model  ^(engine: !TRANSCRIBE_ENGINE!^):
+echo  -----------------------------------------------------------
+echo   [1] tiny              ~75 MB    !ST_1!
+echo   [2] base             ~145 MB    !ST_2!
+echo   [3] small            ~466 MB    !ST_3!
+echo   [4] medium           ~1.5 GB    !ST_4!   ^(DEFAULT^)
+echo   [5] large-v1         ~3.0 GB    !ST_5!
+echo   [6] large-v2         ~3.0 GB    !ST_6!
+echo   [7] large-v3         ~3.0 GB    !ST_7!
+echo   [8] large-v3-turbo   ~1.62 GB   !ST_8!
+echo  -----------------------------------------------------------
+echo.
+set /p MODEL_CHOICE="Choose model [1-8, default=4]: "
+
+if "!MODEL_CHOICE!"=="1" set MODEL=tiny
+if "!MODEL_CHOICE!"=="2" set MODEL=base
+if "!MODEL_CHOICE!"=="3" set MODEL=small
+if "!MODEL_CHOICE!"=="4" set MODEL=medium
+if "!MODEL_CHOICE!"=="5" set MODEL=large-v1
+if "!MODEL_CHOICE!"=="6" set MODEL=large-v2
+if "!MODEL_CHOICE!"=="7" set MODEL=large-v3
+if "!MODEL_CHOICE!"=="8" set MODEL=large-v3-turbo
+if "!MODEL_CHOICE!"==""  set MODEL=medium
+goto :eof
+
+:: ============================================================
+:: SUBROUTINE: Run transcription on one file
+:: Dispatches to correct engine based on TRANSCRIBE_ENGINE
 :: ============================================================
 :RUN_WHISPER
 set "INPUT_FILE=%~1"
@@ -1453,25 +1460,31 @@ set "FILE_DIR=%FILE_DIR:~0,-1%"
 echo.
 echo  Processing : %~nx1
 echo  Output to  : %FILE_DIR%
-echo  Engine     : Whisper
+echo  Engine     : %TRANSCRIBE_ENGINE%
 echo  Model      : %MODEL%
 echo  Device     : %WHISPER_DEVICE%
 echo  --------------------------------------------------------
 
-if "%LANGUAGE%"=="" (
-    whisper "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --condition_on_previous_text False --no_speech_threshold 0.6
+if "%TRANSCRIBE_ENGINE%"=="whisper" (
+    if "%LANGUAGE%"=="" (
+        whisper "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
+    ) else (
+        whisper "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
+    )
+) else if "%TRANSCRIBE_ENGINE%"=="faster-whisper" (
+    REM stable-ts uses -o <outfile> - construct output path based on format
+    set "ST_OUT=%FILE_DIR%\%~n1.%OUTPUT_FORMAT%"
+    if "%OUTPUT_FORMAT%"=="all" set "ST_OUT=%FILE_DIR%\%~n1.srt"
+    if "%LANGUAGE%"=="" (
+        stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1
+    ) else (
+        stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --language %LANGUAGE% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1
+    )
 ) else (
-    whisper "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --condition_on_previous_text False --no_speech_threshold 0.6
-)
-
-if errorlevel 1 (
-    if not "%WHISPER_DEVICE%"=="cpu" (
-        echo  [!] GPU failed, retrying with CPU...
-        if "%LANGUAGE%"=="" (
-            whisper "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device cpu --condition_on_previous_text False --no_speech_threshold 0.6
-        ) else (
-            whisper "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device cpu --condition_on_previous_text False --no_speech_threshold 0.6
-        )
+    if "%LANGUAGE%"=="" (
+        whisperx "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
+    ) else (
+        whisperx "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
     )
 )
 
@@ -1547,8 +1560,6 @@ goto :eof
 
 :: ============================================================
 :: SUBROUTINE: Detect SRT source language
-:: Input : DETECT_FILE (path to .srt)
-:: Output: SRT_LANG   (en / id / ja / ko / zh / unknown)
 :: ============================================================
 :DETECT_SRT_LANG
 set "SRT_LANG=unknown"
@@ -1557,8 +1568,6 @@ goto :eof
 
 :: ============================================================
 :: SUBROUTINE: Choose target language (excludes source lang)
-:: Input : SRT_LANG
-:: Output: TARGET_LANG, TARGET_SUFFIX
 :: ============================================================
 :CHOOSE_TARGET_LANG
 set "SRT_LANG_NAME=Unknown"
@@ -1606,7 +1615,6 @@ set /a TL_CHOICE=!TL_CHOICE! 2>nul
 if !TL_CHOICE! LSS 1 set "TL_CHOICE=1"
 if !TL_CHOICE! GTR !TL_COUNT! set "TL_CHOICE=!TL_COUNT!"
 
-:: Map choice number back to language (re-run same conditions)
 set "TL_ITER=0"
 set "TARGET_LANG=Other"
 set "TARGET_SUFFIX=_TRANSLATED"
@@ -1656,10 +1664,7 @@ echo  Target: !TARGET_LANG!
 goto :eof
 
 :: ============================================================
-:: SUBROUTINE: Run translation
-:: Gemini primary (+ NLLB auto gap-fill inside translate_srt.py)
-:: Fallback to NLLB-only if Gemini not installed
-:: Input : file path (arg), TARGET_LANG, GEMINI_CMD, NLLB_AVAILABLE
+:: SUBROUTINE: Run translation (Gemini + NLLB)
 :: ============================================================
 :RUN_TRANSLATE
 set "TRANS_FILE=%~1"
@@ -1681,8 +1686,7 @@ if not "!GEMINI_CMD!"=="" (
 goto :eof
 
 :: ============================================================
-:: SUBROUTINE: Run translation OFFLINE (NLLB only, no Gemini)
-:: Input : file path (arg), TARGET_LANG, NLLB_AVAILABLE
+:: SUBROUTINE: Run translation OFFLINE (NLLB only)
 :: ============================================================
 :RUN_TRANSLATE_OFFLINE
 set "TRANS_FILE=%~1"
@@ -1698,8 +1702,7 @@ python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_P
 goto :eof
 
 :: ============================================================
-:: SUBROUTINE: Run translation OFFLINE (LLM primary + NLLB gap-fill)
-:: Input : file path (arg), TARGET_LANG, OLLAMA_MODEL, NLLB_AVAILABLE
+:: SUBROUTINE: Run translation OFFLINE (LLM primary + NLLB)
 :: ============================================================
 :RUN_TRANSLATE_OFFLINE_LLM
 set "TRANS_FILE=%~1"
@@ -1720,7 +1723,6 @@ goto :eof
 
 :: ============================================================
 :: SUBROUTINE: Choose Ollama model from installed models
-:: Output: OLLAMA_MODEL (set to selected model name, or "none" if not found)
 :: ============================================================
 :CHOOSE_OLLAMA_MODEL
 set "OLL_IDX=0"
@@ -1760,14 +1762,11 @@ goto OLL_SEL_PROMPT
 
 :: ============================================================
 :: SUBROUTINE: Get video duration via ffprobe
-:: Input : VIDEO_FILE (path to video)
-:: Output: VID_MIN (total minutes), VID_HHMM (display string)
 :: ============================================================
 :GET_VIDEO_DURATION
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
 set "FFPROBE_DUR="
-:: Use temp file to avoid quoting issues with paths containing spaces
 ffprobe -v quiet -show_entries format=duration -of csv=p=0 "!VIDEO_FILE!" > "%TEMP%\ffprobe_dur.tmp" 2>nul
 for /f "usebackq tokens=*" %%D in ("%TEMP%\ffprobe_dur.tmp") do set "FFPROBE_DUR=%%D"
 del "%TEMP%\ffprobe_dur.tmp" 2>nul

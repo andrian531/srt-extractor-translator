@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 chcp 65001 >nul 2>&1
 
 :: ============================================================
-::  WHISPER SUBTITLE EXTRACTOR
+::  FASTER-WHISPER SUBTITLE EXTRACTOR
 ::  Place this .bat in your video folder and double-click
 :: ============================================================
 
@@ -28,9 +28,9 @@ if not exist "%SCRIPT_DIR%\.installed" (
     pause
     exit /b 1
 )
-where whisper >nul 2>&1
+python -c "import stable_whisper; import faster_whisper" >nul 2>&1
 if errorlevel 1 (
-    echo  [ERROR] Whisper not found. Please run install.bat to reinstall.
+    echo  [ERROR] faster-whisper or stable-ts not found. Please run install.bat to install it.
     echo.
     pause
     exit /b 1
@@ -44,7 +44,7 @@ if errorlevel 1 (
 )
 
 :: ============================================================
-:: GPU CHECK (quick verify, no install)
+:: GPU CHECK
 :: ============================================================
 set "CUDA_OK=false"
 set "GPU_DEVICE=cpu"
@@ -54,9 +54,10 @@ for /f "tokens=*" %%L in ('python "%~dp0check_gpu.py" verify 2^>nul') do (
     set "%%L"
 )
 set "WHISPER_DEVICE=!GPU_DEVICE!"
+if "!WHISPER_DEVICE!"=="mps" set "WHISPER_DEVICE=cpu"
 
 :: ============================================================
-:: ENGINE DETECTION (runs once, shared by all menus)
+:: ENGINE DETECTION (Gemini / NLLB for translation)
 :: ============================================================
 set "GEMINI_CMD="
 set "NLLB_AVAILABLE=false"
@@ -102,7 +103,7 @@ set "OFFLINE_LLM=false"
 set "SWAP_PRIMARY=false"
 cls
 echo ============================================================
-echo   WHISPER SUBTITLE EXTRACTOR
+echo   FASTER-WHISPER SUBTITLE EXTRACTOR
 echo   Folder: %SCRIPT_DIR%
 if not "!GPU_DEVICE!"=="cpu" (
     echo   GPU   : !GPU_NAME! ^(!VRAM!^)
@@ -153,7 +154,6 @@ if not "!GEMINI_CMD!"=="" echo  [OK] Gemini : !GEMINI_CMD!
 if "!NLLB_AVAILABLE!"=="true" echo  [OK] NLLB   : offline ^(local model^)
 echo.
 
-:: Scan .srt files (skip already-translated files)
 echo  Scanning for subtitle files (.srt) in: %SCRIPT_DIR%
 echo ============================================================
 echo.
@@ -191,7 +191,6 @@ set /a STEST=!SCHOICE! 2>nul
 if !STEST! LSS 1 goto INVALID_SRT
 if !STEST! GTR !SIDX! goto INVALID_SRT
 
-:: Single file
 set "DETECT_FILE=!SFILE_%SCHOICE%!"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
@@ -218,7 +217,6 @@ for %%c in (!SCHOICE!) do (
 goto TRANSLATE_DONE
 
 :TRANSLATE_ALL_FILES
-:: Detect language from first file, apply to all
 set "DETECT_FILE=!SFILE_1!"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
@@ -331,7 +329,6 @@ echo  [OK] NLLB : offline ^(local model^)
 echo  [INFO] Gemini is skipped. All translation done offline via NLLB.
 echo.
 
-:: Scan .srt files (skip already-translated files)
 echo  Scanning for subtitle files (.srt) in: %SCRIPT_DIR%
 echo ============================================================
 echo.
@@ -369,7 +366,6 @@ set /a STEST=!SCHOICE! 2>nul
 if !STEST! LSS 1 goto OFFLINE_INVALID_SRT
 if !STEST! GTR !SIDX! goto OFFLINE_INVALID_SRT
 
-:: Single file
 set "DETECT_FILE=!SFILE_%SCHOICE%!"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
@@ -432,7 +428,6 @@ if "!NLLB_AVAILABLE!"=="false" (
 echo  [INFO] Gemini is skipped. Translation done offline via NLLB.
 echo.
 
-:: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
 echo  [SRT] = subtitle already exists
 echo ============================================================
@@ -478,7 +473,6 @@ echo  [!] Invalid input
 goto GTO_CHOOSE_FILE
 
 :GTO_CHOOSE_OPTIONS
-:: Get video duration for single file selection
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
 set "IS_MULTI=false"
@@ -490,7 +484,7 @@ if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
 )
 echo.
 echo ============================================================
-echo   TRANSCRIPTION OPTIONS
+echo   TRANSCRIPTION OPTIONS  (faster-whisper (stable-ts))
 echo ============================================================
 if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
@@ -503,7 +497,7 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
 )
 echo.
 
-set "WH_CACHE=%USERPROFILE%\.cache\whisper"
+set "WX_CACHE=%USERPROFILE%\.cache\huggingface\hub"
 set "M1=tiny"
 set "M2=base"
 set "M3=small"
@@ -514,7 +508,7 @@ set "M7=large-v3"
 set "M8=large-v3-turbo"
 for %%i in (1 2 3 4 5 6 7 8) do (
     set "ST_%%i=          "
-    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+    if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "ST_%%i=[downloaded]"
 )
 
 echo  Select model:
@@ -581,7 +575,6 @@ if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
 if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
 if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
 
-:: Set SRT_LANG from source language for smart target exclusion
 set "SRT_LANG=unknown"
 if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
 if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
@@ -590,10 +583,8 @@ if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
 if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
 if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
 
-:: Ask target language upfront
 call :CHOOSE_TARGET_LANG
 
-:: Summary
 echo.
 echo ============================================================
 echo   SUMMARY:
@@ -604,7 +595,7 @@ if /i "!CHOICE!"=="all" (
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
-echo   Engine  : Whisper
+echo   Engine  : faster-whisper (stable-ts)
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -766,7 +757,7 @@ goto RETURN_OR_QUIT
 :MENU_GT_LLM
 cls
 echo ============================================================
-echo   GENERATE + TRANSLATE OFFLINE ^(LLM + NLLB^)
+echo   GENERATE + TRANSLATE OFFLINE ^(LLM + NLLB^) - WhisperX
 echo   Folder: %SCRIPT_DIR%
 echo ============================================================
 echo.
@@ -792,7 +783,6 @@ echo  [INFO] Gemini is skipped. Translation done offline via LLM + NLLB.
 echo.
 
 echo  Scanning for video files in: %SCRIPT_DIR%
-echo  [SRT] = subtitle already exists
 echo ============================================================
 echo.
 
@@ -804,9 +794,7 @@ for /r "%SCRIPT_DIR%" %%f in (
     set "FILE_!IDX!=%%f"
     set "REL=%%f"
     set "REL=!REL:%SCRIPT_DIR%\=!"
-    set "SMARK=     "
-    if exist "%%~dpn.srt" set "SMARK=[SRT]"
-    echo  [!IDX!] !SMARK! !REL!
+    echo  [!IDX!] !REL!
 )
 
 if !IDX!==0 (
@@ -853,8 +841,7 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
 )
 echo.
-
-set "WH_CACHE=%USERPROFILE%\.cache\whisper"
+set "WX_CACHE=%USERPROFILE%\.cache\huggingface\hub"
 set "M1=tiny"
 set "M2=base"
 set "M3=small"
@@ -865,7 +852,7 @@ set "M7=large-v3"
 set "M8=large-v3-turbo"
 for %%i in (1 2 3 4 5 6 7 8) do (
     set "ST_%%i=          "
-    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+    if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "ST_%%i=[downloaded]"
 )
 
 echo  Select model:
@@ -952,7 +939,6 @@ if /i "!CHOICE!"=="all" (
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
-echo   Engine  : Whisper
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -1003,7 +989,7 @@ goto DONE
 :MENU_GENERATE_TRANSLATE
 cls
 echo ============================================================
-echo   GENERATE + TRANSLATE
+echo   GENERATE + TRANSLATE (WhisperX)
 echo   Folder: %SCRIPT_DIR%
 echo ============================================================
 echo.
@@ -1015,7 +1001,6 @@ if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
     echo.
 )
 
-:: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
 echo  [SRT] = subtitle already exists
 echo ============================================================
@@ -1061,7 +1046,6 @@ echo  [!] Invalid input
 goto GT_CHOOSE_FILE
 
 :GT_CHOOSE_OPTIONS
-:: Get video duration for single file selection
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
 set "IS_MULTI=false"
@@ -1073,7 +1057,7 @@ if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
 )
 echo.
 echo ============================================================
-echo   TRANSCRIPTION OPTIONS
+echo   TRANSCRIPTION OPTIONS  (faster-whisper (stable-ts))
 echo ============================================================
 if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
@@ -1086,7 +1070,7 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
 )
 echo.
 
-set "WH_CACHE=%USERPROFILE%\.cache\whisper"
+set "WX_CACHE=%USERPROFILE%\.cache\huggingface\hub"
 set "M1=tiny"
 set "M2=base"
 set "M3=small"
@@ -1097,7 +1081,7 @@ set "M7=large-v3"
 set "M8=large-v3-turbo"
 for %%i in (1 2 3 4 5 6 7 8) do (
     set "ST_%%i=          "
-    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+    if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "ST_%%i=[downloaded]"
 )
 
 echo  Select model:
@@ -1164,7 +1148,6 @@ if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
 if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
 if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
 
-:: Set SRT_LANG from source language for smart target exclusion
 set "SRT_LANG=unknown"
 if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
 if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
@@ -1173,10 +1156,8 @@ if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
 if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
 if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
 
-:: Ask target language upfront
 call :CHOOSE_TARGET_LANG
 
-:: Summary
 echo.
 echo ============================================================
 echo   SUMMARY:
@@ -1187,7 +1168,7 @@ if /i "!CHOICE!"=="all" (
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
-echo   Engine  : Whisper
+echo   Engine  : faster-whisper (stable-ts)
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -1237,12 +1218,11 @@ goto DONE
 :MENU_GENERATE
 cls
 echo ============================================================
-echo   GENERATE SUBTITLE
+echo   GENERATE SUBTITLE  (WhisperX)
 echo   Folder: %SCRIPT_DIR%
 echo ============================================================
 echo.
 
-:: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
 echo  [SRT] = subtitle already exists
 echo ============================================================
@@ -1288,7 +1268,6 @@ echo  [!] Invalid input
 goto CHOOSE_FILE
 
 :CHOOSE_OPTIONS
-:: Get video duration for single file selection
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
 set "IS_MULTI=false"
@@ -1300,7 +1279,7 @@ if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
 )
 echo.
 echo ============================================================
-echo   TRANSCRIPTION OPTIONS
+echo   TRANSCRIPTION OPTIONS  (faster-whisper (stable-ts))
 echo ============================================================
 if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
@@ -1313,7 +1292,7 @@ if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
 )
 echo.
 
-set "WH_CACHE=%USERPROFILE%\.cache\whisper"
+set "WX_CACHE=%USERPROFILE%\.cache\huggingface\hub"
 set "M1=tiny"
 set "M2=base"
 set "M3=small"
@@ -1324,7 +1303,7 @@ set "M7=large-v3"
 set "M8=large-v3-turbo"
 for %%i in (1 2 3 4 5 6 7 8) do (
     set "ST_%%i=          "
-    if exist "!WH_CACHE!\!M%%i!.pt" set "ST_%%i=[downloaded]"
+    if exist "!WX_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "ST_%%i=[downloaded]"
 )
 
 echo  Select model:
@@ -1391,7 +1370,6 @@ if "!FMT_CHOICE!"=="3" set OUTPUT_FORMAT=txt
 if "!FMT_CHOICE!"=="4" set OUTPUT_FORMAT=all
 if "!FMT_CHOICE!"==""  set OUTPUT_FORMAT=srt
 
-:: Summary
 echo.
 echo ============================================================
 echo   SUMMARY:
@@ -1402,7 +1380,7 @@ if /i "!CHOICE!"=="all" (
 ) else (
     echo   File    : !FILE_%CHOICE%!
 )
-echo   Engine  : Whisper
+echo   Engine  : faster-whisper (stable-ts)
 echo   Model   : !MODEL!
 if "!LANGUAGE!"=="" (
     echo   Language: Auto-detect
@@ -1443,7 +1421,7 @@ for /l %%i in (1,1,!IDX!) do (
 goto DONE
 
 :: ============================================================
-:: SUBROUTINE: Run Whisper on one file
+:: SUBROUTINE: Run faster-whisper (stable-ts) on one file
 :: ============================================================
 :RUN_WHISPER
 set "INPUT_FILE=%~1"
@@ -1453,26 +1431,26 @@ set "FILE_DIR=%FILE_DIR:~0,-1%"
 echo.
 echo  Processing : %~nx1
 echo  Output to  : %FILE_DIR%
-echo  Engine     : Whisper
+echo  Engine     : faster-whisper (stable-ts)
 echo  Model      : %MODEL%
 echo  Device     : %WHISPER_DEVICE%
 echo  --------------------------------------------------------
 
-if "%LANGUAGE%"=="" (
-    whisper "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --condition_on_previous_text False --no_speech_threshold 0.6
-) else (
-    whisper "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --condition_on_previous_text False --no_speech_threshold 0.6
-)
+set "ST_OUT=%FILE_DIR%\%~n1.%OUTPUT_FORMAT%"
+if "%OUTPUT_FORMAT%"=="all" set "ST_OUT=%FILE_DIR%\%~n1.srt"
 
-if errorlevel 1 (
-    if not "%WHISPER_DEVICE%"=="cpu" (
-        echo  [!] GPU failed, retrying with CPU...
-        if "%LANGUAGE%"=="" (
-            whisper "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device cpu --condition_on_previous_text False --no_speech_threshold 0.6
-        ) else (
-            whisper "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device cpu --condition_on_previous_text False --no_speech_threshold 0.6
-        )
-    )
+set "STABLE_LANG=%LANGUAGE%"
+if "%LANGUAGE%"=="Japanese"   set "STABLE_LANG=ja"
+if "%LANGUAGE%"=="Korean"     set "STABLE_LANG=ko"
+if "%LANGUAGE%"=="Chinese"    set "STABLE_LANG=zh"
+if "%LANGUAGE%"=="Cantonese"  set "STABLE_LANG=yue"
+if "%LANGUAGE%"=="Indonesian" set "STABLE_LANG=id"
+if "%LANGUAGE%"=="English"    set "STABLE_LANG=en"
+
+if "%LANGUAGE%"=="" (
+    stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --device %WHISPER_DEVICE% --faster_whisper --word_level false --no_speech_threshold 0.45 --suppress_silence 1
+) else (
+    stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --language %STABLE_LANG% --device %WHISPER_DEVICE% --faster_whisper --word_level false --no_speech_threshold 0.45 --suppress_silence 1
 )
 
 if errorlevel 1 (
@@ -1547,8 +1525,6 @@ goto :eof
 
 :: ============================================================
 :: SUBROUTINE: Detect SRT source language
-:: Input : DETECT_FILE (path to .srt)
-:: Output: SRT_LANG   (en / id / ja / ko / zh / unknown)
 :: ============================================================
 :DETECT_SRT_LANG
 set "SRT_LANG=unknown"
@@ -1557,8 +1533,6 @@ goto :eof
 
 :: ============================================================
 :: SUBROUTINE: Choose target language (excludes source lang)
-:: Input : SRT_LANG
-:: Output: TARGET_LANG, TARGET_SUFFIX
 :: ============================================================
 :CHOOSE_TARGET_LANG
 set "SRT_LANG_NAME=Unknown"
@@ -1606,7 +1580,6 @@ set /a TL_CHOICE=!TL_CHOICE! 2>nul
 if !TL_CHOICE! LSS 1 set "TL_CHOICE=1"
 if !TL_CHOICE! GTR !TL_COUNT! set "TL_CHOICE=!TL_COUNT!"
 
-:: Map choice number back to language (re-run same conditions)
 set "TL_ITER=0"
 set "TARGET_LANG=Other"
 set "TARGET_SUFFIX=_TRANSLATED"
@@ -1760,14 +1733,11 @@ goto OLL_SEL_PROMPT
 
 :: ============================================================
 :: SUBROUTINE: Get video duration via ffprobe
-:: Input : VIDEO_FILE (path to video)
-:: Output: VID_MIN (total minutes), VID_HHMM (display string)
 :: ============================================================
 :GET_VIDEO_DURATION
 set "VID_MIN=0"
 set "VID_HHMM=unknown"
 set "FFPROBE_DUR="
-:: Use temp file to avoid quoting issues with paths containing spaces
 ffprobe -v quiet -show_entries format=duration -of csv=p=0 "!VIDEO_FILE!" > "%TEMP%\ffprobe_dur.tmp" 2>nul
 for /f "usebackq tokens=*" %%D in ("%TEMP%\ffprobe_dur.tmp") do set "FFPROBE_DUR=%%D"
 del "%TEMP%\ffprobe_dur.tmp" 2>nul

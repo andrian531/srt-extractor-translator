@@ -387,12 +387,12 @@ def detect_genre(engine_cmd, engine_type, srt_path, sample_lines=60):
         return ""
 
 
-def run_translate_prompt(engine_cmd, engine_type, prompt):
+def run_translate_prompt(engine_cmd, engine_type, prompt, timeout=300):
     try:
         result = subprocess.run(
             [engine_cmd],
             input=prompt,
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=timeout,
             encoding="utf-8", errors="replace"
         )
         return result.returncode, result.stdout, result.stderr
@@ -438,6 +438,61 @@ def check_ollama_responsive(model_name):
     if rc == 0 and stdout.strip():
         return True, stdout.strip()[:80]
     return False, stderr or "no response"
+
+
+def get_available_ollama_models():
+    """Return list of available Ollama model names from the local Ollama server."""
+    import urllib.request
+    import urllib.error
+    import json
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return [m["name"] for m in data.get("models", [])]
+    except Exception:
+        return []
+
+
+def select_ollama_model_for_lang(source_lang, target_lang_name, available_models):
+    """Pick the best Ollama model for a given language pair.
+
+    Priority order (experience-based):
+    1. translategema  — purpose-built translation model, handles all content
+    2. gemma3 / gemma2 / gemma  — reliable, tolerant of explicit content
+    3. dolphin-* — uncensored finetunes, good fallback for mature content
+    4. mistral / llama  — decent multilingual
+    5. qwen  — last: tends to refuse explicit/adult subtitle content
+
+    Returns the best model name, or None if nothing is available.
+    """
+    if not available_models:
+        return None
+
+    # Ordered priority keywords (checked left-to-right, first match wins)
+    PRIORITY = [
+        "translategema",   # purpose-built translation, no refusals
+        "translategemma",  # alternate spelling
+        "gemma3",          # best general gemma for translation
+        "gemma2",
+        "gemma",
+        "dolphin",         # uncensored finetunes
+        "mistral",
+        "llama",
+        "phi",
+        "aya",
+        "deepseek",
+        "command",
+        "qwen",            # last: often refuses explicit content
+    ]
+
+    for keyword in PRIORITY:
+        for model in available_models:
+            if keyword.lower() in model.lower():
+                return model
+
+    # Nothing matched — return first available
+    return available_models[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1166,12 +1221,23 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
         print(f"  [ERROR] Gemini not responding: {msg}")
         return 1
     print(f"  [OK] Gemini responsive ({msg[:50]})")
+
+    # Detect best Ollama model as fallback when Gemini times out
+    print(f"  Checking Ollama fallback...")
+    available_ollama   = get_available_ollama_models()
+    ollama_fallback_model = select_ollama_model_for_lang(source_lang, target_lang, available_ollama)
+    if ollama_fallback_model:
+        print(f"  Ollama fallback : {ollama_fallback_model}")
+    else:
+        print(f"  Ollama fallback : not available (Gemini only)")
+
     print(f"  Translating in batches...")
 
-    MAX_TOKENS_PER_BATCH = 200   # increased from 150 for better context
-    GEMINI_BATCH_DELAY   = 5
-    MAX_RETRY            = 2
-    CONTEXT_WINDOW       = 3     # recent translated lines passed as context
+    MAX_TOKENS_PER_BATCH  = 200   # increased from 150 for better context
+    GEMINI_BATCH_DELAY    = 5
+    GEMINI_BATCH_TIMEOUT  = 120  # seconds per batch; fail fast so Ollama fallback kicks in
+    MAX_RETRY             = 2
+    CONTEXT_WINDOW        = 3    # recent translated lines passed as context
 
     def est_tok(text):
         return max(1, len(text) // 4)
@@ -1268,7 +1334,9 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
         try:
             rc, stdout, stderr = -1, "", ""
             for attempt in range(1, MAX_RETRY + 2):
-                rc, stdout, stderr = run_translate_prompt(engine_cmd, engine_type, prompt)
+                rc, stdout, stderr = run_translate_prompt(
+                    engine_cmd, engine_type, prompt, timeout=GEMINI_BATCH_TIMEOUT
+                )
                 if rc == 0 and stdout.strip():
                     break
                 if attempt <= MAX_RETRY:
@@ -1278,11 +1346,44 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
                     time.sleep(wait)
 
             if rc != 0 or not stdout.strip():
-                print(f" FAILED (rc={rc})")
+                tag = "TIMEOUT" if stderr == "TIMEOUT" else f"rc={rc}"
+                print(f" FAILED ({tag})")
                 print(f"      stdout: {repr(stdout[:300])}")
                 print(f"      stderr: {repr(stderr[:300])}")
-                for idx, ts, text in batch:
-                    translated_blocks.append((idx, ts, text))
+
+                # --- Ollama fallback for this batch ---
+                if ollama_fallback_model:
+                    print(f"      [->] Gemini failed — trying Ollama ({ollama_fallback_model})...",
+                          end="", flush=True)
+                    oll_rc, oll_out, oll_err = run_translate_prompt_ollama(
+                        ollama_fallback_model, prompt
+                    )
+                    if oll_rc == 0 and oll_out.strip():
+                        oll_lines = {}
+                        for line in oll_out.strip().split("\n"):
+                            m2 = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+                            if m2:
+                                oll_lines[m2.group(1)] = m2.group(2)
+                        oll_matched = sum(1 for idx, _, _ in batch if idx in oll_lines)
+                        print(f" OK ({oll_matched}/{len(batch)} match)")
+                        if oll_matched > 0:
+                            with open(tmp_file, "w", encoding="utf-8") as f:
+                                for idx, _, _ in batch:
+                                    f.write(f"[{idx}] {oll_lines.get(idx, '')}\n")
+                        for idx, ts, text in batch:
+                            trans = oll_lines.get(idx, text)
+                            translated_blocks.append((idx, ts, trans))
+                            if idx in oll_lines:
+                                source_map[idx] = "ollama_fallback"
+                                recent_context.append((idx, trans))
+                        recent_context = recent_context[-CONTEXT_WINDOW:]
+                    else:
+                        print(f" FAILED ({oll_err[:60]})")
+                        for idx, ts, text in batch:
+                            translated_blocks.append((idx, ts, text))
+                else:
+                    for idx, ts, text in batch:
+                        translated_blocks.append((idx, ts, text))
                 continue
 
             translated_lines = {}
@@ -1569,17 +1670,19 @@ def translate_subtitles(engine_cmd, srt_path, output_path, engine_type="gemini",
         exit_code = 1
 
     # Quality report
-    gemini_c   = sum(1 for v in source_map.values() if v == "gemini")
-    nllb_c     = sum(1 for v in source_map.values() if v == "nllb")
-    retry_c    = sum(1 for v in source_map.values() if v == "gemini_retry")
-    fallback_c = sum(1 for v in source_map.values() if v == "nllb_fallback")
-    untrans_c  = total - translated_count
+    gemini_c        = sum(1 for v in source_map.values() if v == "gemini")
+    nllb_c          = sum(1 for v in source_map.values() if v == "nllb")
+    retry_c         = sum(1 for v in source_map.values() if v == "gemini_retry")
+    oll_fallback_c  = sum(1 for v in source_map.values() if v == "ollama_fallback")
+    fallback_c      = sum(1 for v in source_map.values() if v == "nllb_fallback")
+    untrans_c       = total - translated_count
     parts = []
-    if gemini_c:   parts.append(f"Gemini: {gemini_c}")
-    if nllb_c:     parts.append(f"NLLB: {nllb_c}")
-    if retry_c:    parts.append(f"Retry: {retry_c}")
-    if fallback_c: parts.append(f"Fallback: {fallback_c}")
-    if untrans_c:  parts.append(f"Untranslated: {untrans_c}")
+    if gemini_c:       parts.append(f"Gemini: {gemini_c}")
+    if oll_fallback_c: parts.append(f"Ollama(fallback): {oll_fallback_c}")
+    if nllb_c:         parts.append(f"NLLB: {nllb_c}")
+    if retry_c:        parts.append(f"Retry: {retry_c}")
+    if fallback_c:     parts.append(f"Fallback: {fallback_c}")
+    if untrans_c:      parts.append(f"Untranslated: {untrans_c}")
     if parts:
         print(f"  [Report] " + "  |  ".join(parts))
 

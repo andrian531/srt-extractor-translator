@@ -1453,6 +1453,9 @@ set "SRT_FILE=%FILE_DIR%\%~n1.srt"
 if exist "!SRT_FILE!" (
     echo.
     echo  --------------------------------------------------------
+    echo  [*] Running auto-cleanup (fix overlaps + merge short segments)...
+    call :RUN_CLEANUP "!SRT_FILE!"
+    echo  --------------------------------------------------------
     if "!AUTO_TRANSLATE!"=="true" (
         echo  Auto-translating to !TARGET_LANG!...
         if "!SRT_LANG!"=="unknown" (
@@ -1486,6 +1489,26 @@ if exist "!SRT_FILE!" (
             echo  [INFO] Skipped. Use menu [2] to translate later.
         )
     )
+)
+goto :eof
+
+:: ============================================================
+:: SUBROUTINE: Auto-cleanup SRT (fix overlaps + merge short segs)
+:: Input : file path (arg)
+:: Overwrites the original file in-place
+:: ============================================================
+:RUN_CLEANUP
+set "CLEAN_FILE=%~1"
+if not exist "!CLEAN_FILE!" goto :eof
+python "%~dp0cleanup_srt.py" "!CLEAN_FILE!"
+if errorlevel 1 (
+    echo  [WARN] Cleanup skipped (error in cleanup_srt.py)
+    goto :eof
+)
+set "CLEAN_OUT=%~dpn1_clean%~x1"
+if exist "!CLEAN_OUT!" (
+    move /y "!CLEAN_OUT!" "!CLEAN_FILE!" >nul
+    echo  [OK]  Cleanup applied in-place: %~nx1
 )
 goto :eof
 

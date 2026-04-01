@@ -4,7 +4,11 @@
       "WebSearch",
       "Bash(git add translate_srt.py whisper-subtitle.bat whisperx-subtitle.bat cleanup_srt.py)",
       "Bash(git commit:*)",
-      "Bash(git add README.md)"
+      "Bash(git add README.md)",
+      "Bash(cmd.exe /c \"ollama list 2>&1\")",
+      "Bash(cmd.exe /c \"where ollama && ollama list\")",
+      "Bash(cmd.exe /c \"\"\"C:\\\\Users\\\\andri\\\\AppData\\\\Local\\\\Programs\\\\Ollama\\\\ollama.exe\"\" list 2>&1\")",
+      "Bash(cmd.exe /c \"%LOCALAPPDATA%\\\\Programs\\\\Ollama\\\\ollama.exe list 2>&1\")"
     ]
   }
 }

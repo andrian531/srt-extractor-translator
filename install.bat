@@ -105,19 +105,26 @@ echo.
 
 set "WX_LABEL=   "
 set "W_LABEL= "
-if "!CURRENT_ENGINE!"=="whisperx" set "WX_LABEL=[installed]"
-if "!CURRENT_ENGINE!"=="whisper"  set "W_LABEL=[installed]"
+set "FW_LABEL=   "
+if "!CURRENT_ENGINE!"=="whisperx"       set "WX_LABEL=[installed]"
+if "!CURRENT_ENGINE!"=="whisper"        set "W_LABEL=[installed]"
+if "!CURRENT_ENGINE!"=="faster-whisper" set "FW_LABEL=[installed]"
 
 echo   [1] WhisperX  !WX_LABEL!
-echo       + Faster (CTranslate2 backend, up to 4-8x faster)
-echo       + More precise timestamps (word-level alignment)
-echo       + Better transcription accuracy
-echo       - Larger model size (large-v3-turbo ~1.62 GB vs ~809 MB)
+echo       + Fastest (CTranslate2 backend, up to 4-8x faster)
+echo       + Word-level timestamps
+echo       - Forced alignment often causes timestamp errors
 echo.
 echo   [2] Whisper (standard OpenAI)  !W_LABEL!
-echo       + Well-tested, widely compatible
-echo       + Simpler installation
-echo       - Slower than WhisperX
+echo       + Most accurate transcription
+echo       + Stable timestamps
+echo       - Slowest (~1 hour for 2-hour video on RTX 3060)
+echo.
+echo   [3] faster-whisper + stable-ts  !FW_LABEL!  [RECOMMENDED]
+echo       + Fast (same speed as WhisperX)
+echo       + Better timestamps than WhisperX (no forced alignment issues)
+echo       + Anti-hallucination filtering
+echo       - Requires 2 packages (faster-whisper + stable-ts)
 echo.
 
 if "!CURRENT_ENGINE!"=="whisperx" (
@@ -126,23 +133,25 @@ if "!CURRENT_ENGINE!"=="whisperx" (
 ) else if "!CURRENT_ENGINE!"=="whisper" (
     set "ENG_DEFAULT=2"
     echo   Current install: Whisper ^(press Enter to keep^)
-) else if "!CUDA_OK!"=="true" (
-    echo   GPU recommendation: [1] WhisperX
-    echo   Reason: GPU detected, WhisperX will run significantly faster
-    set "ENG_DEFAULT=1"
+) else if "!CURRENT_ENGINE!"=="faster-whisper" (
+    set "ENG_DEFAULT=3"
+    echo   Current install: faster-whisper + stable-ts ^(press Enter to keep^)
 ) else (
-    echo   Recommendation: [1] WhisperX
-    echo   Reason: WhisperX is still faster and more accurate even on CPU
-    set "ENG_DEFAULT=1"
+    echo   Recommendation: [3] faster-whisper + stable-ts
+    echo   Reason: Best balance of speed and timestamp accuracy
+    set "ENG_DEFAULT=3"
 )
 echo.
 
-set /p ENGINE_INPUT="  Choose [1=WhisperX / 2=Whisper, default=!ENG_DEFAULT!]: "
+set /p ENGINE_INPUT="  Choose [1=WhisperX / 2=Whisper / 3=faster-whisper+stable-ts, default=!ENG_DEFAULT!]: "
 if "!ENGINE_INPUT!"=="" set "ENGINE_INPUT=!ENG_DEFAULT!"
 
 if "!ENGINE_INPUT!"=="2" (
     set "INSTALL_ENGINE=whisper"
     echo  Selected: Whisper ^(standard^)
+) else if "!ENGINE_INPUT!"=="3" (
+    set "INSTALL_ENGINE=faster-whisper"
+    echo  Selected: faster-whisper + stable-ts
 ) else (
     set "INSTALL_ENGINE=whisperx"
     echo  Selected: WhisperX
@@ -157,7 +166,8 @@ echo.
 :: ============================================================
 echo [4/5] Installing !INSTALL_ENGINE!...
 
-if "!INSTALL_ENGINE!"=="whisper" goto INSTALL_WHISPER
+if "!INSTALL_ENGINE!"=="whisper"         goto INSTALL_WHISPER
+if "!INSTALL_ENGINE!"=="faster-whisper" goto INSTALL_FASTER_WHISPER
 goto INSTALL_WHISPERX
 
 :INSTALL_WHISPER
@@ -196,6 +206,42 @@ if errorlevel 1 (
     goto INSTALL_FAILED
 )
 echo  [OK] WhisperX installed
+
+:INSTALL_FASTER_WHISPER
+python -c "import faster_whisper" >nul 2>&1
+if not errorlevel 1 (
+    echo  [OK] faster-whisper already installed
+) else (
+    echo  Installing faster-whisper...
+    pip install faster-whisper
+    if errorlevel 1 (
+        echo  [ERROR] faster-whisper installation failed.
+        goto INSTALL_FAILED
+    )
+    python -c "import faster_whisper" >nul 2>&1
+    if errorlevel 1 (
+        echo  [ERROR] faster-whisper not found after installation.
+        goto INSTALL_FAILED
+    )
+    echo  [OK] faster-whisper installed
+)
+python -c "import stable_whisper" >nul 2>&1
+if not errorlevel 1 (
+    echo  [OK] stable-ts already installed
+) else (
+    echo  Installing stable-ts...
+    pip install stable-ts
+    if errorlevel 1 (
+        echo  [ERROR] stable-ts installation failed.
+        goto INSTALL_FAILED
+    )
+    python -c "import stable_whisper" >nul 2>&1
+    if errorlevel 1 (
+        echo  [ERROR] stable-ts not found after installation.
+        goto INSTALL_FAILED
+    )
+    echo  [OK] stable-ts installed
+)
 
 :INSTALL_PYTORCH
 echo.
@@ -302,7 +348,8 @@ if "!CLAUDE_FOUND!"=="false" if "!GEMINI_FOUND!"=="false" (
 :: ============================================================
 :: STEP 5b: Model Download
 :: ============================================================
-if "!INSTALL_ENGINE!"=="whisperx" goto WX_MODEL_SECTION
+if "!INSTALL_ENGINE!"=="whisperx"       goto WX_MODEL_SECTION
+if "!INSTALL_ENGINE!"=="faster-whisper" goto FW_MODEL_SECTION
 
 echo.
 echo [5b] Whisper Model Download ^(optional^)
@@ -423,6 +470,68 @@ for %%i in (1 2 3 4 5 6 7 8) do (
     call :DOWNLOAD_WX_MODEL !M%%i!
 )
 goto WX_MODEL_LOOP
+
+:: ============================================================
+:: STEP 5b-fw: faster-whisper + stable-ts Model Download
+:: ============================================================
+:FW_MODEL_SECTION
+set "FW_CACHE=%USERPROFILE%\.cache\huggingface\hub"
+echo.
+echo [5b] faster-whisper + stable-ts Model Download ^(optional^)
+echo  Models stored in: !FW_CACHE!\
+echo  Same model format as WhisperX — shares cached models if both installed.
+echo.
+
+set "M1=tiny"           & set "S1=~75 MB  " & set "V1=~1 GB "
+set "M2=base"           & set "S2=~145 MB " & set "V2=~1 GB "
+set "M3=small"          & set "S3=~466 MB " & set "V3=~2 GB "
+set "M4=medium"         & set "S4=~1.5 GB " & set "V4=~5 GB "
+set "M5=large-v1"       & set "S5=~3.0 GB " & set "V5=~10 GB"
+set "M6=large-v2"       & set "S6=~3.0 GB " & set "V6=~10 GB"
+set "M7=large-v3"       & set "S7=~3.0 GB " & set "V7=~10 GB"
+set "M8=large-v3-turbo" & set "S8=~1.62 GB" & set "V8=~6 GB "
+
+set "FW_DEFAULT=S"
+
+:FW_MODEL_LOOP
+for %%i in (1 2 3 4 5 6 7 8) do (
+    set "FW_ST_%%i=            "
+    if exist "!FW_CACHE!\models--Systran--faster-whisper-!M%%i!\" set "FW_ST_%%i=[installed]  "
+    if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "FW_ST_%%i=[RECOMMENDED]"
+    if exist "!FW_CACHE!\models--Systran--faster-whisper-!M%%i!\" if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "FW_ST_%%i=[installed] * "
+    if /i "!M%%i!"=="!RECOMMENDED_MODEL!" set "FW_DEFAULT=%%i"
+)
+
+echo.
+echo  faster-whisper models  ^(stored in: !FW_CACHE!\^)
+echo  ------------------------------------------------------------------------
+echo   No  Model              Size       VRAM       Status
+echo  ------------------------------------------------------------------------
+for %%i in (1 2 3 4 5 6 7 8) do (
+    echo   [%%i] !M%%i!          !S%%i!   !V%%i!     !FW_ST_%%i!
+)
+echo  ------------------------------------------------------------------------
+echo   [A] Download ALL models
+echo   [S] Skip / Done
+echo  ------------------------------------------------------------------------
+echo.
+set /p FW_DL="Choose [1-8 / A / S, default=!FW_DEFAULT!]: "
+if "!FW_DL!"=="" set "FW_DL=!FW_DEFAULT!"
+if /i "!FW_DL!"=="S" goto NLLB_SECTION
+if /i "!FW_DL!"=="A" goto FW_DL_ALL
+set /a FW_IDX=!FW_DL! 2>nul
+if !FW_IDX! LSS 1 goto FW_MODEL_LOOP
+if !FW_IDX! GTR 8 goto FW_MODEL_LOOP
+echo.
+call :DOWNLOAD_WX_MODEL !M%FW_DL%!
+goto FW_MODEL_LOOP
+
+:FW_DL_ALL
+echo.
+for %%i in (1 2 3 4 5 6 7 8) do (
+    call :DOWNLOAD_WX_MODEL !M%%i!
+)
+goto FW_MODEL_LOOP
 
 :: ============================================================
 :: STEP 5c: NLLB Translation Model (offline, local)
@@ -688,7 +797,8 @@ if /i "!OLLAMA_MORE!"=="Y" goto OLLAMA_MODEL_LOOP
 echo installed > "%SCRIPT_DIR%\.installed"
 
 set "USE_BAT=whisper-subtitle.bat"
-if "!INSTALL_ENGINE!"=="whisperx" set "USE_BAT=whisperx-subtitle.bat"
+if "!INSTALL_ENGINE!"=="whisperx"       set "USE_BAT=whisperx-subtitle.bat"
+if "!INSTALL_ENGINE!"=="faster-whisper" set "USE_BAT=faster-whisper-subtitle.bat"
 
 set "NLLB_STATUS=not installed"
 if exist "%SCRIPT_DIR%\.nllb" (
@@ -702,7 +812,9 @@ if exist "%SCRIPT_DIR%\.ollama" (
 echo.
 echo ============================================================
 echo  [SUCCESS] Installation complete!
-echo  Engine   : !INSTALL_ENGINE!
+set "ENGINE_LABEL=!INSTALL_ENGINE!"
+if "!INSTALL_ENGINE!"=="faster-whisper" set "ENGINE_LABEL=faster-whisper + stable-ts"
+echo  Engine   : !ENGINE_LABEL!
 echo  NLLB     : !NLLB_STATUS!
 echo  Offline LLM : !OLLAMA_STATUS!
 echo  Run      : !USE_BAT!
