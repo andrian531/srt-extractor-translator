@@ -1476,9 +1476,9 @@ if "%TRANSCRIBE_ENGINE%"=="whisper" (
     set "ST_OUT=%FILE_DIR%\%~n1.%OUTPUT_FORMAT%"
     if "%OUTPUT_FORMAT%"=="all" set "ST_OUT=%FILE_DIR%\%~n1.srt"
     if "%LANGUAGE%"=="" (
-        stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1
+        stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
     ) else (
-        stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --language %LANGUAGE% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1
+        stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --language %LANGUAGE% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
     )
 ) else (
     if "%LANGUAGE%"=="" (

@@ -92,6 +92,10 @@ if not errorlevel 1 (
     )
 )
 
+set "STABLE_TS_INSTALLED=false"
+python -c "import stable_whisper" >nul 2>&1
+if not errorlevel 1 set "STABLE_TS_INSTALLED=true"
+
 :: ============================================================
 :: MAIN MENU
 :: ============================================================
@@ -1458,10 +1462,23 @@ echo  Model      : %MODEL%
 echo  Device     : %WHISPER_DEVICE%
 echo  --------------------------------------------------------
 
-if "%LANGUAGE%"=="" (
-    whisper "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --condition_on_previous_text False --no_speech_threshold 0.6
+setlocal DisableDelayedExpansion
+set "RAW_FILE=%~1"
+setlocal EnableDelayedExpansion
+
+if "!STABLE_TS_INSTALLED!"=="true" (
+    echo  [*] Starting Stable Whisper Processing...
+    if "!LANGUAGE!"=="" (
+        python "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine whisper --model !MODEL! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+    ) else (
+        python "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine whisper --model !MODEL! --language !LANGUAGE! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+    )
 ) else (
-    whisper "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --condition_on_previous_text False --no_speech_threshold 0.6
+    if "!LANGUAGE!"=="" (
+        whisper "!RAW_FILE!" --model !MODEL! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE! --condition_on_previous_text False --no_speech_threshold 0.6
+    ) else (
+        whisper "!RAW_FILE!" --model !MODEL! --language !LANGUAGE! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE! --condition_on_previous_text False --no_speech_threshold 0.6
+    )
 )
 
 if errorlevel 1 (
@@ -1475,34 +1492,37 @@ if errorlevel 1 (
     )
 )
 
-if errorlevel 1 (
-    echo  [ERROR] Failed to process: %~nx1
-    goto :eof
-)
+echo  [DONE] Transcription complete: %~nx1
+set "SRT_NAME=%~n1"
+set "SRT_PATH=%FILE_DIR%\!SRT_NAME!.srt"
 
-echo  [DONE] Subtitle saved to: %FILE_DIR%
-
-set "SRT_FILE=%FILE_DIR%\%~n1.srt"
-if exist "!SRT_FILE!" (
-    echo.
-    echo  --------------------------------------------------------
-    echo  [*] Running auto-cleanup (fix overlaps + merge short segments)...
-    call :RUN_CLEANUP "!SRT_FILE!"
-    echo  --------------------------------------------------------
+if exist "!SRT_PATH!" (
+    echo  [*] Running auto-cleanup...
+    call :RUN_CLEANUP "!SRT_PATH!"
+    
     if "!AUTO_TRANSLATE!"=="true" (
-        echo  Auto-translating to !TARGET_LANG!...
+        echo.
+        echo  --------------------------------------------------------
+        echo  [*] Starting Auto-translation to !TARGET_LANG!...
+        echo  --------------------------------------------------------
         if "!SRT_LANG!"=="unknown" (
-            set "DETECT_FILE=!SRT_FILE!"
+            set "DETECT_FILE=!SRT_PATH!"
             call :DETECT_SRT_LANG
         )
         if "!OFFLINE_LLM!"=="true" (
-            call :RUN_TRANSLATE_OFFLINE_LLM "!SRT_FILE!"
+            call :RUN_TRANSLATE_OFFLINE_LLM "!SRT_PATH!"
         ) else if "!OFFLINE_TRANSLATE!"=="true" (
-            call :RUN_TRANSLATE_OFFLINE "!SRT_FILE!"
+            call :RUN_TRANSLATE_OFFLINE "!SRT_PATH!"
         ) else (
-            call :RUN_TRANSLATE "!SRT_FILE!"
+            call :RUN_TRANSLATE "!SRT_PATH!"
         )
-    ) else (
+    )
+)
+echo.
+echo ============================================================
+echo   FILE FINISHED: %~nx1
+echo ============================================================
+goto :eof
         set /p TRANSLATE_NOW="  Translate subtitle? (Y/N, default=N): "
         if /i "!TRANSLATE_NOW!"=="Y" (
             set "SRT_LANG=unknown"
@@ -1782,15 +1802,20 @@ goto :eof
 :DONE
 echo.
 echo ============================================================
-echo   All done!
+echo   PROCESS COMPLETED!
 echo ============================================================
 echo.
 goto RETURN_OR_QUIT
 
 :RETURN_OR_QUIT
+echo ------------------------------------------------------------
+echo  What would you like to do next?
+echo  [M] Back to Main Menu
+echo  [Q] Exit (Quit)
+echo ------------------------------------------------------------
 echo.
-echo   [M] Back to main menu   [Q] Quit
-echo.
+set "_RQCHOICE=M"
 set /p _RQCHOICE="Choose [M/Q, default=M]: "
 if /i "!_RQCHOICE!"=="Q" exit /b 0
+if /i "!_RQCHOICE!"=="M" goto MAIN_LOOP
 goto MAIN_LOOP

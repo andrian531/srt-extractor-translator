@@ -1448,9 +1448,9 @@ if "%LANGUAGE%"=="Indonesian" set "STABLE_LANG=id"
 if "%LANGUAGE%"=="English"    set "STABLE_LANG=en"
 
 if "%LANGUAGE%"=="" (
-    stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --device %WHISPER_DEVICE% --faster_whisper --word_level false --no_speech_threshold 0.45 --suppress_silence 1
+    stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --device %WHISPER_DEVICE% --faster_whisper --word_level false --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
 ) else (
-    stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --language %STABLE_LANG% --device %WHISPER_DEVICE% --faster_whisper --word_level false --no_speech_threshold 0.45 --suppress_silence 1
+    stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --language %STABLE_LANG% --device %WHISPER_DEVICE% --faster_whisper --word_level false --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
 )
 
 if errorlevel 1 (
@@ -1762,5 +1762,10 @@ echo.
 echo   [M] Back to main menu   [Q] Quit
 echo.
 set /p _RQCHOICE="Choose [M/Q, default=M]: "
-if /i "!_RQCHOICE!"=="Q" exit /b 0
+if /i "!_RQCHOICE!"=="Q" (
+    echo.
+    echo  Press any key to close...
+    pause >nul
+    exit /b 0
+)
 goto MAIN_LOOP
