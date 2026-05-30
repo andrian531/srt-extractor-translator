@@ -129,6 +129,11 @@ if not errorlevel 1 (
 )
 
 :: ============================================================
+:: INIT ENGINE
+:: ============================================================
+REM call :SELECT_TRANSCRIPTION_ENGINE
+
+:: ============================================================
 :: MAIN MENU
 :: ============================================================
 :MAIN_LOOP
@@ -145,7 +150,7 @@ if not "!GPU_DEVICE!"=="cpu" (
 ) else (
     echo   GPU    : CPU mode
 )
-echo   Engines:!ENG_LIST!
+echo   Engine : !TRANSCRIBE_ENGINE!
 echo ============================================================
 echo.
 echo   [1] Generate Subtitle            - extract subtitles from video files
@@ -246,8 +251,9 @@ echo.
 for %%c in (!SCHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
-        echo  [*] Translating: !SFILE_%%c!
-        call :RUN_TRANSLATE "!SFILE_%%c!"
+        call set "_SFPATH=%%SFILE_!CTEST!%%"
+        echo  [*] Translating: !_SFPATH!
+        call :RUN_TRANSLATE "!_SFPATH!"
     )
 )
 goto TRANSLATE_DONE
@@ -421,8 +427,9 @@ echo.
 for %%c in (!SCHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
-        echo  [*] Translating: !SFILE_%%c!
-        call :RUN_TRANSLATE_OFFLINE "!SFILE_%%c!"
+        call set "_SFPATH=%%SFILE_!CTEST!%%"
+        echo  [*] Translating: !_SFPATH!
+        call :RUN_TRANSLATE_OFFLINE "!_SFPATH!"
     )
 )
 goto OFFLINE_TRANSLATE_DONE
@@ -532,8 +539,9 @@ echo.
 for %%c in (!SCHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
-        echo  [*] Translating: !SFILE_%%c!
-        call :RUN_TRANSLATE_OFFLINE_LLM "!SFILE_%%c!"
+        call set "_SFPATH=%%SFILE_!CTEST!%%"
+        echo  [*] Translating: !_SFPATH!
+        call :RUN_TRANSLATE_OFFLINE_LLM "!_SFPATH!"
     )
 )
 goto LLM_TRANSLATE_DONE
@@ -622,23 +630,18 @@ if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
     call :GET_VIDEO_DURATION
 )
 echo.
-echo ============================================================
-echo   STEP 1/3 - SELECT TRANSCRIPTION ENGINE
-echo ============================================================
 if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
+    echo.
 )
-echo.
-call :SELECT_TRANSCRIPTION_ENGINE
-echo.
 echo ============================================================
-echo   STEP 2/3 - SELECT MODEL
+echo   STEP 1/2 - SELECT MODEL
 echo ============================================================
 echo.
 call :SELECT_MODEL
 echo.
 echo ============================================================
-echo   STEP 3/3 - LANGUAGE ^& FORMAT
+echo   STEP 2/2 - LANGUAGE ^& FORMAT
 echo ============================================================
 echo.
 
@@ -719,9 +722,10 @@ goto DONE
 for %%c in (!CHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        call set "_FPATH=%%FILE_!CTEST!%%"
         echo.
-        echo  [*] Processing: !FILE_%%c!
-        call :RUN_WHISPER "!FILE_%%c!"
+        echo  [*] Processing: !_FPATH!
+        call :RUN_WHISPER "!_FPATH!"
     )
 )
 goto DONE
@@ -807,23 +811,18 @@ if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
     call :GET_VIDEO_DURATION
 )
 echo.
-echo ============================================================
-echo   STEP 1/3 - SELECT TRANSCRIPTION ENGINE
-echo ============================================================
 if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
+    echo.
 )
-echo.
-call :SELECT_TRANSCRIPTION_ENGINE
-echo.
 echo ============================================================
-echo   STEP 2/3 - SELECT MODEL
+echo   STEP 1/2 - SELECT MODEL
 echo ============================================================
 echo.
 call :SELECT_MODEL
 echo.
 echo ============================================================
-echo   STEP 3/3 - LANGUAGE ^& FORMAT
+echo   STEP 2/2 - LANGUAGE ^& FORMAT
 echo ============================================================
 echo.
 
@@ -918,9 +917,10 @@ goto DONE
 for %%c in (!CHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        call set "_FPATH=%%FILE_!CTEST!%%"
         echo.
-        echo  [*] Processing: !FILE_%%c!
-        call :RUN_WHISPER "!FILE_%%c!"
+        echo  [*] Processing: !_FPATH!
+        call :RUN_WHISPER "!_FPATH!"
     )
 )
 goto DONE
@@ -1007,23 +1007,18 @@ if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
     call :GET_VIDEO_DURATION
 )
 echo.
-echo ============================================================
-echo   STEP 1/3 - SELECT TRANSCRIPTION ENGINE
-echo ============================================================
 if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
+    echo.
 )
-echo.
-call :SELECT_TRANSCRIPTION_ENGINE
-echo.
 echo ============================================================
-echo   STEP 2/3 - SELECT MODEL
+echo   STEP 1/2 - SELECT MODEL
 echo ============================================================
 echo.
 call :SELECT_MODEL
 echo.
 echo ============================================================
-echo   STEP 3/3 - LANGUAGE ^& FORMAT
+echo   STEP 2/2 - LANGUAGE ^& FORMAT
 echo ============================================================
 echo.
 
@@ -1119,9 +1114,10 @@ goto DONE
 for %%c in (!CHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        call set "_FPATH=%%FILE_!CTEST!%%"
         echo.
-        echo  [*] Processing: !FILE_%%c!
-        call :RUN_WHISPER "!FILE_%%c!"
+        echo  [*] Processing: !_FPATH!
+        call :RUN_WHISPER "!_FPATH!"
     )
 )
 goto DONE
@@ -1217,23 +1213,18 @@ if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
     call :GET_VIDEO_DURATION
 )
 echo.
-echo ============================================================
-echo   STEP 1/3 - SELECT TRANSCRIPTION ENGINE
-echo ============================================================
 if /i not "!CHOICE!"=="all" if not "!VID_HHMM!"=="unknown" (
     echo  Duration : !VID_HHMM!
+    echo.
 )
-echo.
-call :SELECT_TRANSCRIPTION_ENGINE
-echo.
 echo ============================================================
-echo   STEP 2/3 - SELECT MODEL
+echo   STEP 1/2 - SELECT MODEL
 echo ============================================================
 echo.
 call :SELECT_MODEL
 echo.
 echo ============================================================
-echo   STEP 3/3 - LANGUAGE ^& FORMAT
+echo   STEP 2/2 - LANGUAGE ^& FORMAT
 echo ============================================================
 echo.
 
@@ -1329,9 +1320,10 @@ goto DONE
 for %%c in (!CHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
+        call set "_FPATH=%%FILE_!CTEST!%%"
         echo.
-        echo  [*] Processing: !FILE_%%c!
-        call :RUN_WHISPER "!FILE_%%c!"
+        echo  [*] Processing: !_FPATH!
+        call :RUN_WHISPER "!_FPATH!"
     )
 )
 goto DONE
@@ -1349,6 +1341,22 @@ goto DONE
 :: Sets: TRANSCRIBE_ENGINE
 :: ============================================================
 :SELECT_TRANSCRIPTION_ENGINE
+if exist "%SCRIPT_DIR%\.engine" (
+    for /f "usebackq tokens=*" %%E in ("%SCRIPT_DIR%\.engine") do set "TRANSCRIBE_ENGINE=%%E"
+    
+    REM Verify the saved engine is actually installed
+    set "ENG_OK=false"
+    if "!TRANSCRIBE_ENGINE!"=="whisper" if "!WHISPER_INSTALLED!"=="true" set "ENG_OK=true"
+    if "!TRANSCRIBE_ENGINE!"=="whisperx" if "!WHISPERX_INSTALLED!"=="true" set "ENG_OK=true"
+    if "!TRANSCRIBE_ENGINE!"=="faster-whisper" if "!FASTER_WHISPER_INSTALLED!"=="true" set "ENG_OK=true"
+    
+    if "!ENG_OK!"=="true" (
+        exit /b 0
+    ) else (
+        echo  [WARN] Saved engine '!TRANSCRIBE_ENGINE!' is not installed. Please select again.
+    )
+)
+
 set "TE_COUNT=3"
 set "TE_1=whisper"
 set "TE_2=whisperx"
@@ -1380,17 +1388,41 @@ for /l %%i in (1,1,3) do (
     set "DEF_TXT="
     if "%%i"=="!TE_REC!" set "DEF_TXT= *DEFAULT*"
     
-    echo   [%%i] !TE_%%i! !TE_STATUS! - !TE_LABEL!!DEF_TXT!
+    REM Only show if installed
+    if "!TE_STATUS!"=="[Installed]" (
+        echo   [%%i] !TE_%%i! - !TE_LABEL!!DEF_TXT!
+    )
 )
 echo.
-set /p TE_CHOICE="Choose engine [1-3, default=!TE_DEFAULT!]: "
+
+:ASK_ENGINE
+set /p TE_CHOICE="Choose engine [default=!TE_DEFAULT!]: "
 if "!TE_CHOICE!"=="" set "TE_CHOICE=!TE_DEFAULT!"
 set /a TE_TEST=!TE_CHOICE! 2>nul
-if !TE_TEST! LSS 1 set "TE_CHOICE=!TE_DEFAULT!"
-if !TE_TEST! GTR 3 set "TE_CHOICE=!TE_DEFAULT!"
+
+if !TE_TEST! LSS 1 goto INVALID_ENG
+if !TE_TEST! GTR 3 goto INVALID_ENG
+
 set "TRANSCRIBE_ENGINE=!TE_%TE_CHOICE%!"
-echo  Selected: !TRANSCRIBE_ENGINE!
+
+REM Validate selection
+set "SEL_OK=false"
+if "!TRANSCRIBE_ENGINE!"=="whisper" if "!WHISPER_INSTALLED!"=="true" set "SEL_OK=true"
+if "!TRANSCRIBE_ENGINE!"=="whisperx" if "!WHISPERX_INSTALLED!"=="true" set "SEL_OK=true"
+if "!TRANSCRIBE_ENGINE!"=="faster-whisper" if "!FASTER_WHISPER_INSTALLED!"=="true" set "SEL_OK=true"
+
+if "!SEL_OK!"=="false" (
+    echo  [!] Engine not installed! Please choose an installed engine.
+    goto ASK_ENGINE
+)
+
+echo !TRANSCRIBE_ENGINE!> "%SCRIPT_DIR%\.engine"
+echo  Selected: !TRANSCRIBE_ENGINE! ^(Saved to .engine^)
 goto :eof
+
+:INVALID_ENG
+echo  [!] Invalid choice
+goto ASK_ENGINE
 
 :: ============================================================
 :: SUBROUTINE: Select model (adapts cache path to engine)
@@ -1465,32 +1497,63 @@ echo  Model      : %MODEL%
 echo  Device     : %WHISPER_DEVICE%
 echo  --------------------------------------------------------
 
+setlocal DisableDelayedExpansion
+set "RAW_FILE=%~1"
+setlocal EnableDelayedExpansion
+
 if "%TRANSCRIBE_ENGINE%"=="whisper" (
     if "%LANGUAGE%"=="" (
-        whisper "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
+        whisper "!RAW_FILE!" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
     ) else (
-        whisper "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
+        whisper "!RAW_FILE!" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
     )
 ) else if "%TRANSCRIBE_ENGINE%"=="faster-whisper" (
     REM stable-ts uses -o <outfile> - construct output path based on format
     set "ST_OUT=%FILE_DIR%\%~n1.%OUTPUT_FORMAT%"
     if "%OUTPUT_FORMAT%"=="all" set "ST_OUT=%FILE_DIR%\%~n1.srt"
     if "%LANGUAGE%"=="" (
-        stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
+        stable-ts "!RAW_FILE!" -o "!ST_OUT!" --model %MODEL% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
     ) else (
-        stable-ts "%INPUT_FILE%" -o "!ST_OUT!" --model %MODEL% --language %LANGUAGE% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
+        stable-ts "!RAW_FILE!" -o "!ST_OUT!" --model %MODEL% --language %LANGUAGE% --device %WHISPER_DEVICE% --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
     )
 ) else (
     if "%LANGUAGE%"=="" (
-        whisperx "%INPUT_FILE%" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
+        whisperx "!RAW_FILE!" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
     ) else (
-        whisperx "%INPUT_FILE%" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
+        whisperx "!RAW_FILE!" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device %WHISPER_DEVICE% --max_line_width 35 --max_line_count 2
     )
 )
 
 if errorlevel 1 (
-    echo  [ERROR] Failed to process: %~nx1
-    goto :eof
+    if not "%WHISPER_DEVICE%"=="cpu" (
+        echo  [!] GPU failed, retrying with CPU...
+        if "%TRANSCRIBE_ENGINE%"=="whisper" (
+            if "%LANGUAGE%"=="" (
+                whisper "!RAW_FILE!" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device cpu --max_line_width 35 --max_line_count 2
+            ) else (
+                whisper "!RAW_FILE!" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device cpu --max_line_width 35 --max_line_count 2
+            )
+        ) else if "%TRANSCRIBE_ENGINE%"=="faster-whisper" (
+            set "ST_OUT=%FILE_DIR%\%~n1.%OUTPUT_FORMAT%"
+            if "%OUTPUT_FORMAT%"=="all" set "ST_OUT=%FILE_DIR%\%~n1.srt"
+            if "%LANGUAGE%"=="" (
+                stable-ts "!RAW_FILE!" -o "!ST_OUT!" --model %MODEL% --device cpu --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
+            ) else (
+                stable-ts "!RAW_FILE!" -o "!ST_OUT!" --model %MODEL% --language %LANGUAGE% --device cpu --backend faster-whisper --max_line_count 2 --max_line_width 35 --no_speech_threshold 0.45 --suppress_silence 1 --condition_on_previous_text false
+            )
+        ) else (
+            if "%LANGUAGE%"=="" (
+                whisperx "!RAW_FILE!" --model %MODEL% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device cpu --max_line_width 35 --max_line_count 2
+            ) else (
+                whisperx "!RAW_FILE!" --model %MODEL% --language %LANGUAGE% --output_format %OUTPUT_FORMAT% --output_dir "%FILE_DIR%" --device cpu --max_line_width 35 --max_line_count 2
+            )
+        )
+    ) else (
+        echo  [ERROR] Failed to process: %~nx1
+        endlocal
+        endlocal
+        goto :eof
+    )
 )
 
 echo  [DONE] Subtitle saved to: %FILE_DIR%
@@ -1516,26 +1579,12 @@ if exist "!SRT_FILE!" (
             call :RUN_TRANSLATE "!SRT_FILE!"
         )
     ) else (
-        set /p TRANSLATE_NOW="  Translate subtitle? (Y/N, default=N): "
-        if /i "!TRANSLATE_NOW!"=="Y" (
-            set "SRT_LANG=unknown"
-            if "!LANGUAGE!"=="Japanese"   set "SRT_LANG=ja"
-            if "!LANGUAGE!"=="Korean"     set "SRT_LANG=ko"
-            if "!LANGUAGE!"=="Chinese"    set "SRT_LANG=zh"
-            if "!LANGUAGE!"=="Cantonese"  set "SRT_LANG=zh"
-            if "!LANGUAGE!"=="Indonesian" set "SRT_LANG=id"
-            if "!LANGUAGE!"=="English"    set "SRT_LANG=en"
-            if "!SRT_LANG!"=="unknown" (
-                set "DETECT_FILE=!SRT_FILE!"
-                call :DETECT_SRT_LANG
-            )
-            call :CHOOSE_TARGET_LANG
-            call :RUN_TRANSLATE "!SRT_FILE!"
-        ) else (
-            echo  [INFO] Skipped. Use menu [2] to translate later.
-        )
+        echo  [INFO] Translation skipped. Use menu [2] to translate later.
     )
 )
+
+endlocal
+endlocal
 goto :eof
 
 :: ============================================================
