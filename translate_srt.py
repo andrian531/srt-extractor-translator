@@ -32,18 +32,31 @@ TARGET_LANG_TO_CODE = {
 # ---------------------------------------------------------------------------
 def detect_gemini_cmd():
     import shutil
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", "")
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        preferred = [
+            os.path.join(appdata,      "npm", "gemini.cmd"),
+            os.path.join(localappdata, "npm", "gemini.cmd"),
+        ]
+        for path in preferred:
+            if os.path.exists(path):
+                return path
+
     for cmd in ["gemini", "gemini-cli"]:
         found = shutil.which(cmd)
         if found:
-            return found
+            return resolve_cmd(found)
+
     appdata = os.environ.get("APPDATA", "")
     localappdata = os.environ.get("LOCALAPPDATA", "")
-    for path in [
+    fallback = [
         os.path.join(appdata,      "npm", "gemini.cmd"),
         os.path.join(appdata,      "npm", "gemini"),
         os.path.join(localappdata, "npm", "gemini.cmd"),
         os.path.join(localappdata, "npm", "gemini"),
-    ]:
+    ]
+    for path in fallback:
         if os.path.exists(path):
             return path
     return None
@@ -54,6 +67,10 @@ def resolve_cmd(cmd):
     if not cmd:
         return cmd
     if os.path.isabs(cmd) and os.path.exists(cmd):
+        if sys.platform == "win32":
+            base, ext = os.path.splitext(cmd)
+            if ext.lower() != ".cmd" and os.path.exists(base + ".cmd"):
+                return base + ".cmd"
         return cmd
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA", "")
@@ -335,6 +352,7 @@ def detect_artifacts(translated_blocks, source_lang=""):
 # ---------------------------------------------------------------------------
 def check_engine_responsive(engine_cmd, engine_type):
     try:
+        engine_cmd = resolve_cmd(engine_cmd)
         result = subprocess.run(
             [engine_cmd],
             input="Reply with only the word: OK",
@@ -389,6 +407,7 @@ def detect_genre(engine_cmd, engine_type, srt_path, sample_lines=60):
 
 def run_translate_prompt(engine_cmd, engine_type, prompt, timeout=300):
     try:
+        engine_cmd = resolve_cmd(engine_cmd)
         result = subprocess.run(
             [engine_cmd],
             input=prompt,
