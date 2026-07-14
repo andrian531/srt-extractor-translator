@@ -740,13 +740,8 @@ def _translate_ollama(srt_path, output_path, target_lang, source_lang, script_di
             "Reply with ONLY the genre/type description, nothing else.\n\n"
             f"Subtitle excerpt:\n{sample}"
         )
-        # Prefer Gemini for genre detection (more accurate), fall back to Ollama
-        gemini_cmd = detect_gemini_cmd()
-        if gemini_cmd:
-            print(f"  Genre detection : using Gemini...")
-            rc, genre_out, _ = run_translate_prompt(gemini_cmd, "gemini", genre_prompt)
-        else:
-            rc, genre_out, _ = run_translate_prompt_ollama(model_name, genre_prompt, timeout=120)
+        print(f"  Genre detection : using Ollama...")
+        rc, genre_out, _ = run_translate_prompt_ollama(model_name, genre_prompt, timeout=120)
         if rc == 0 and genre_out.strip():
             genre = genre_out.strip().split("\n")[0][:300]
             print(f"  Genre          : {genre}")
