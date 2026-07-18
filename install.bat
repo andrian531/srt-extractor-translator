@@ -35,6 +35,30 @@ if errorlevel 1 (
     goto INSTALL_FAILED
 )
 for /f "tokens=*" %%v in ('python --version 2^>^&1') do echo  [OK] %%v
+set "PY_CMD=%SCRIPT_DIR%\.venv\Scripts\python.exe"
+set "PIP_CMD=%SCRIPT_DIR%\.venv\Scripts\python.exe -m pip"
+if not exist "%PY_CMD%" (
+    echo  Creating local virtual environment...
+    python -m venv "%SCRIPT_DIR%\.venv"
+    if errorlevel 1 (
+        echo  [ERROR] Failed to create local .venv.
+        goto INSTALL_FAILED
+    )
+)
+set "PATH=%SCRIPT_DIR%\.venv\Scripts;%PATH%"
+"%PY_CMD%" -m pip --version >nul 2>&1
+if errorlevel 1 (
+    echo  [ERROR] pip is not available in local .venv.
+    goto INSTALL_FAILED
+)
+"%PY_CMD%" -m pip install -U pip >nul 2>&1
+if exist "%SCRIPT_DIR%\requirements.txt" (
+    echo  Installing packages from requirements.txt...
+    %PIP_CMD% install -r "%SCRIPT_DIR%\requirements.txt"
+    if errorlevel 1 (
+        echo  [WARN] requirements.txt install had errors. Continuing with selected engine install.
+    )
+)
 
 :: ============================================================
 :: STEP 2: ffmpeg
@@ -105,10 +129,13 @@ echo.
 
 set "WX_LABEL=   "
 set "W_LABEL= "
+set "WS_LABEL= "
 set "FW_LABEL=   "
 if "!CURRENT_ENGINE!"=="whisperx"       set "WX_LABEL=[installed]"
 if "!CURRENT_ENGINE!"=="whisper"        set "W_LABEL=[installed]"
-if "!CURRENT_ENGINE!"=="faster-whisper" set "FW_LABEL=[installed]"
+if "!CURRENT_ENGINE!"=="whisper-stable" set "WS_LABEL=[installed]"
+if "!CURRENT_ENGINE!"=="faster-whisper" set "WS_LABEL=[installed]"
+if "!CURRENT_ENGINE!"=="faster-whisper-stable" set "FW_LABEL=[installed]"
 
 echo   [1] WhisperX  !WX_LABEL!
 echo       + Fastest (CTranslate2 backend, up to 4-8x faster)
@@ -120,11 +147,14 @@ echo       + Most accurate transcription
 echo       + Stable timestamps
 echo       - Slowest (~1 hour for 2-hour video on RTX 3060)
 echo.
-echo   [3] faster-whisper + stable-ts  !FW_LABEL!  [RECOMMENDED]
-echo       + Fast (same speed as WhisperX)
-echo       + Better timestamps than WhisperX (no forced alignment issues)
-echo       + Anti-hallucination filtering
-echo       - Requires 2 packages (faster-whisper + stable-ts)
+echo   [3] Whisper + stable-ts  !WS_LABEL!  [RECOMMENDED]
+echo       + Same Whisper model path, but with stable-ts/VAD
+echo       + Good quality for Japanese/Chinese based on your tests
+echo       - Slower than faster-whisper on some files
+echo.
+echo   [4] faster-whisper + stable-ts  !FW_LABEL!
+echo       + Fastest stable-ts option
+echo       - Quality can be worse on your Japanese files
 echo.
 
 if "!CURRENT_ENGINE!"=="whisperx" (
@@ -133,24 +163,33 @@ if "!CURRENT_ENGINE!"=="whisperx" (
 ) else if "!CURRENT_ENGINE!"=="whisper" (
     set "ENG_DEFAULT=2"
     echo   Current install: Whisper ^(press Enter to keep^)
+) else if "!CURRENT_ENGINE!"=="whisper-stable" (
+    set "ENG_DEFAULT=3"
+    echo   Current install: Whisper + stable-ts ^(press Enter to keep^)
 ) else if "!CURRENT_ENGINE!"=="faster-whisper" (
     set "ENG_DEFAULT=3"
+    echo   Current install: Whisper + stable-ts ^(legacy setting, press Enter to keep^)
+) else if "!CURRENT_ENGINE!"=="faster-whisper-stable" (
+    set "ENG_DEFAULT=4"
     echo   Current install: faster-whisper + stable-ts ^(press Enter to keep^)
 ) else (
-    echo   Recommendation: [3] faster-whisper + stable-ts
-    echo   Reason: Best balance of speed and timestamp accuracy
+    echo   Recommendation: [3] Whisper + stable-ts
+    echo   Reason: Best match for your Japanese/Chinese usage and previous quality tests
     set "ENG_DEFAULT=3"
 )
 echo.
 
-set /p ENGINE_INPUT="  Choose [1=WhisperX / 2=Whisper / 3=faster-whisper+stable-ts, default=!ENG_DEFAULT!]: "
+set /p ENGINE_INPUT="  Choose [1=WhisperX / 2=Whisper / 3=Whisper+stable-ts / 4=faster-whisper+stable-ts, default=!ENG_DEFAULT!]: "
 if "!ENGINE_INPUT!"=="" set "ENGINE_INPUT=!ENG_DEFAULT!"
 
 if "!ENGINE_INPUT!"=="2" (
     set "INSTALL_ENGINE=whisper"
     echo  Selected: Whisper ^(standard^)
 ) else if "!ENGINE_INPUT!"=="3" (
-    set "INSTALL_ENGINE=faster-whisper"
+    set "INSTALL_ENGINE=whisper-stable"
+    echo  Selected: Whisper + stable-ts
+) else if "!ENGINE_INPUT!"=="4" (
+    set "INSTALL_ENGINE=faster-whisper-stable"
     echo  Selected: faster-whisper + stable-ts
 ) else (
     set "INSTALL_ENGINE=whisperx"
@@ -166,8 +205,9 @@ echo.
 :: ============================================================
 echo [4/5] Installing !INSTALL_ENGINE!...
 
-if "!INSTALL_ENGINE!"=="whisper"         goto INSTALL_WHISPER
-if "!INSTALL_ENGINE!"=="faster-whisper" goto INSTALL_FASTER_WHISPER
+if "!INSTALL_ENGINE!"=="whisper"        goto INSTALL_WHISPER
+if "!INSTALL_ENGINE!"=="whisper-stable" goto INSTALL_WHISPER_STABLE
+if "!INSTALL_ENGINE!"=="faster-whisper-stable" goto INSTALL_FASTER_WHISPER
 goto INSTALL_WHISPERX
 
 :INSTALL_WHISPER
@@ -186,6 +226,22 @@ if errorlevel 1 (
     goto INSTALL_FAILED
 )
 echo  [OK] Whisper installed
+goto INSTALL_PYTORCH
+
+:INSTALL_WHISPER_STABLE
+call :INSTALL_WHISPER_CORE
+if errorlevel 1 goto INSTALL_FAILED
+python -c "import stable_whisper" >nul 2>&1
+if not errorlevel 1 (
+    echo  [OK] stable-ts already installed
+) else (
+    echo  Installing stable-ts...
+    pip install stable-ts
+    if errorlevel 1 (
+        echo  [ERROR] stable-ts installation failed.
+        goto INSTALL_FAILED
+    )
+)
 goto INSTALL_PYTORCH
 
 :INSTALL_WHISPERX
@@ -242,6 +298,7 @@ if not errorlevel 1 (
     )
     echo  [OK] stable-ts installed
 )
+goto INSTALL_PYTORCH
 
 :INSTALL_PYTORCH
 echo.
@@ -348,8 +405,8 @@ if "!CLAUDE_FOUND!"=="false" if "!GEMINI_FOUND!"=="false" (
 :: ============================================================
 :: STEP 5b: Model Download
 :: ============================================================
-if "!INSTALL_ENGINE!"=="whisperx"       goto WX_MODEL_SECTION
-if "!INSTALL_ENGINE!"=="faster-whisper" goto FW_MODEL_SECTION
+if "!INSTALL_ENGINE!"=="whisperx" goto WX_MODEL_SECTION
+if "!INSTALL_ENGINE!"=="faster-whisper-stable" goto FW_MODEL_SECTION
 
 echo.
 echo [5b] Whisper Model Download ^(optional^)
@@ -796,9 +853,7 @@ if /i "!OLLAMA_MORE!"=="Y" goto OLLAMA_MODEL_LOOP
 :FINISH
 echo installed > "%SCRIPT_DIR%\.installed"
 
-set "USE_BAT=whisper-subtitle.bat"
-if "!INSTALL_ENGINE!"=="whisperx"       set "USE_BAT=whisperx-subtitle.bat"
-if "!INSTALL_ENGINE!"=="faster-whisper" set "USE_BAT=faster-whisper-subtitle.bat"
+set "USE_BAT=run.bat"
 
 set "NLLB_STATUS=not installed"
 if exist "%SCRIPT_DIR%\.nllb" (
@@ -813,7 +868,8 @@ echo.
 echo ============================================================
 echo  [SUCCESS] Installation complete!
 set "ENGINE_LABEL=!INSTALL_ENGINE!"
-if "!INSTALL_ENGINE!"=="faster-whisper" set "ENGINE_LABEL=faster-whisper + stable-ts"
+if "!INSTALL_ENGINE!"=="whisper-stable" set "ENGINE_LABEL=Whisper + stable-ts"
+if "!INSTALL_ENGINE!"=="faster-whisper-stable" set "ENGINE_LABEL=faster-whisper + stable-ts"
 echo  Engine   : !ENGINE_LABEL!
 echo  NLLB     : !NLLB_STATUS!
 echo  Offline LLM : !OLLAMA_STATUS!
@@ -821,6 +877,25 @@ echo  Run      : !USE_BAT!
 echo ============================================================
 echo.
 pause
+exit /b 0
+
+::------------------------------------------------------------
+:INSTALL_WHISPER_CORE
+where whisper >nul 2>&1
+if not errorlevel 1 (
+    echo  [OK] Whisper CLI already found
+    exit /b 0
+)
+echo  Installing standard Whisper...
+pip install -U openai-whisper --no-deps
+if errorlevel 1 pip install -U openai-whisper
+pip install tiktoken more-itertools numba tqdm regex >nul 2>&1
+where whisper >nul 2>&1
+if errorlevel 1 (
+    echo  [ERROR] Whisper CLI not found after installation.
+    exit /b 1
+)
+echo  [OK] Whisper installed
 exit /b 0
 
 ::------------------------------------------------------------

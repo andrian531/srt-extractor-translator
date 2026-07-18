@@ -17,6 +17,11 @@ set "AUTO_TRANSLATE=false"
 set "OFFLINE_TRANSLATE=false"
 set "OFFLINE_LLM=false"
 set "SWAP_PRIMARY=false"
+set "RUNTIME_ENGINE=whisper-stable"
+if exist "%SCRIPT_DIR%\.engine" (
+    for /f "usebackq tokens=*" %%E in ("%SCRIPT_DIR%\.engine") do set "RUNTIME_ENGINE=%%E"
+)
+if "%RUNTIME_ENGINE%"=="faster-whisper" set "RUNTIME_ENGINE=whisper-stable"
 
 :: ============================================================
 :: QUICK DEPENDENCY CHECK
@@ -24,13 +29,6 @@ set "SWAP_PRIMARY=false"
 if not exist "%SCRIPT_DIR%\.installed" (
     echo  [ERROR] Dependencies not installed.
     echo  Please run install.bat first.
-    echo.
-    pause
-    exit /b 1
-)
-where whisper >nul 2>&1
-if errorlevel 1 (
-    echo  [ERROR] Whisper not found. Please run install.bat to reinstall.
     echo.
     pause
     exit /b 1
@@ -49,6 +47,24 @@ if errorlevel 1 (
     echo.
     pause
     exit /b 1
+)
+if "!RUNTIME_ENGINE!"=="whisper" (
+    where whisper >nul 2>&1
+    if errorlevel 1 (
+        echo  [ERROR] Whisper not found. Please run install.bat to reinstall.
+        echo.
+        pause
+        exit /b 1
+    )
+)
+if "!RUNTIME_ENGINE!"=="whisperx" (
+    where whisperx >nul 2>&1
+    if errorlevel 1 (
+        echo  [ERROR] WhisperX not found. Please run install.bat to reinstall.
+        echo.
+        pause
+        exit /b 1
+    )
 )
 
 :: ============================================================
@@ -112,6 +128,13 @@ if not errorlevel 1 (
 set "STABLE_TS_INSTALLED=false"
 "!PY_CMD!" -c "import stable_whisper" >nul 2>&1
 if not errorlevel 1 set "STABLE_TS_INSTALLED=true"
+set "STABLE_TS_ENABLED=false"
+set "STABLE_ENGINE=whisper"
+if "!RUNTIME_ENGINE!"=="whisper-stable" set "STABLE_TS_ENABLED=true"
+if "!RUNTIME_ENGINE!"=="faster-whisper-stable" (
+    set "STABLE_TS_ENABLED=true"
+    set "STABLE_ENGINE=faster-whisper"
+)
 
 :: ============================================================
 :: FILENAME SANITIZE CHECK (runs once at startup)
@@ -140,6 +163,7 @@ if "!STABLE_TS_INSTALLED!"=="true" (
 ) else (
     echo   Stable TS: not installed
 )
+echo   Engine: !RUNTIME_ENGINE!
 echo ============================================================
 echo.
 echo   [1] Generate Subtitle            - extract subtitles from video files
@@ -1548,7 +1572,7 @@ call :GET_NOW_SECONDS REPORT_GENERATE_START
 echo.
 echo  Processing : %~nx1
 echo  Output to  : %FILE_DIR%
-echo  Engine     : Whisper
+echo  Engine     : %RUNTIME_ENGINE%
 echo  Model      : %MODEL%
 echo  Device     : %WHISPER_DEVICE%
 echo  --------------------------------------------------------
@@ -1557,12 +1581,23 @@ setlocal DisableDelayedExpansion
 set "RAW_FILE=%~1"
 setlocal EnableDelayedExpansion
 
-if "!STABLE_TS_INSTALLED!"=="true" (
-    echo  [*] Starting Stable Whisper Processing...
+if "!RUNTIME_ENGINE!"=="whisperx" (
     if "!LANGUAGE!"=="" (
-        "!PY_CMD!" "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine whisper --model !MODEL! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+        whisperx "!RAW_FILE!" --model !MODEL! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
     ) else (
-        "!PY_CMD!" "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine whisper --model !MODEL! --language !LANGUAGE! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+        whisperx "!RAW_FILE!" --model !MODEL! --language !LANGUAGE! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+    )
+) else if "!STABLE_TS_ENABLED!"=="true" (
+    if "!STABLE_TS_INSTALLED!"=="true" (
+        echo  [*] Starting Stable Whisper Processing...
+        if "!LANGUAGE!"=="" (
+            "!PY_CMD!" "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine !STABLE_ENGINE! --model !MODEL! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+        ) else (
+            "!PY_CMD!" "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine !STABLE_ENGINE! --model !MODEL! --language !LANGUAGE! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+        )
+    ) else (
+        echo  [ERROR] stable-ts not installed. Run install.bat and choose a stable-ts engine.
+        exit /b 1
     )
 ) else (
     if "!LANGUAGE!"=="" (
