@@ -6,13 +6,17 @@ Windows batch scripting with EnableDelayedExpansion (primarily '!').
 
 Usage:
   python sanitize_filenames.py <folder> check   -> lists files, prints count first
+  python sanitize_filenames.py <folder> count   -> prints count only
   python sanitize_filenames.py <folder> rename  -> renames files, prints results
 """
 import os
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# Characters that cause problems in batch delayed expansion
+
+# Characters that cause problems in batch delayed expansion / FOR parsing.
 PROBLEM_CHARS = ['!']
 
 VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.mov', '.ts', '.m4v',
@@ -26,6 +30,7 @@ def sanitize_name(name: str) -> str:
     base, ext = os.path.splitext(name)
     for ch in PROBLEM_CHARS:
         base = base.replace(ch, '')
+    base = ''.join(c if ord(c) < 128 else ' ' for c in base)
     # Collapse multiple consecutive spaces that may result from removal
     while '  ' in base:
         base = base.replace('  ', ' ')
@@ -45,7 +50,7 @@ def find_problematic(folder: str):
             if ext not in ALL_EXTS:
                 continue
             # Check if any problematic char is present
-            if not any(ch in fname for ch in PROBLEM_CHARS):
+            if not any(ch in fname for ch in PROBLEM_CHARS) and fname.isascii():
                 continue
             new_name = sanitize_name(fname)
             if new_name == fname:
@@ -64,6 +69,10 @@ def mode_check(folder: str):
         rel = os.path.relpath(old_path, folder)
         print(f"  {rel}")
         print(f"  -> {new_name}")
+
+
+def mode_count(folder: str):
+    print(len(find_problematic(folder)))
 
 
 def mode_rename(folder: str):
@@ -89,7 +98,7 @@ def mode_rename(folder: str):
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print("Usage: sanitize_filenames.py <folder> <check|rename>")
+        print("Usage: sanitize_filenames.py <folder> <check|count|rename>")
         sys.exit(1)
 
     folder = sys.argv[1]
@@ -101,8 +110,10 @@ if __name__ == '__main__':
 
     if mode == 'check':
         mode_check(folder)
+    elif mode == 'count':
+        mode_count(folder)
     elif mode == 'rename':
         mode_rename(folder)
     else:
-        print(f"[ERR] Unknown mode: {mode}. Use 'check' or 'rename'.")
+        print(f"[ERR] Unknown mode: {mode}. Use 'check', 'count', or 'rename'.")
         sys.exit(1)

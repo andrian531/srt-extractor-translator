@@ -19,6 +19,9 @@ Output format for list modes:
 import os
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.mov', '.ts', '.m4v',
               '.flv', '.wmv', '.webm', '.mpeg', '.mpg'}
 

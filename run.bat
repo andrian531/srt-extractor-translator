@@ -35,7 +35,15 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-python --version >nul 2>&1
+set "PY_CMD=python"
+if exist "%SCRIPT_DIR%\.venv\Scripts\python.exe" set "PY_CMD=%SCRIPT_DIR%\.venv\Scripts\python.exe"
+set "WHISPER_EXE="
+for /f "delims=" %%P in ('where whisper 2^>nul') do if not defined WHISPER_EXE set "WHISPER_EXE=%%P"
+if not exist "%SCRIPT_DIR%\.venv\Scripts\python.exe" if defined WHISPER_EXE (
+    set "PY_FROM_WHISPER=!WHISPER_EXE:\Scripts\whisper.exe=\python.exe!"
+    if exist "!PY_FROM_WHISPER!" set "PY_CMD=!PY_FROM_WHISPER!"
+)
+"!PY_CMD!" --version >nul 2>&1
 if errorlevel 1 (
     echo  [ERROR] Python not found. Please run install.bat to reinstall.
     echo.
@@ -50,10 +58,19 @@ set "CUDA_OK=false"
 set "GPU_DEVICE=cpu"
 set "GPU_NAME="
 set "VRAM="
-for /f "tokens=*" %%L in ('python "%~dp0check_gpu.py" verify 2^>nul') do (
+for /f "tokens=*" %%L in ('"!PY_CMD!" "%~dp0check_gpu.py" verify 2^>nul') do (
     set "%%L"
 )
 set "WHISPER_DEVICE=!GPU_DEVICE!"
+if "!WHISPER_DEVICE!"=="cpu" (
+    nvidia-smi -L >nul 2>&1
+    if not errorlevel 1 (
+        set "CUDA_OK=true"
+        set "GPU_DEVICE=cuda"
+        set "WHISPER_DEVICE=cuda"
+        if "!GPU_NAME!"=="" set "GPU_NAME=NVIDIA GPU"
+    )
+)
 
 :: ============================================================
 :: ENGINE DETECTION (runs once, shared by all menus)
@@ -79,7 +96,7 @@ if "!GEMINI_CMD!"=="" (
         )
     )
 )
-python -c "import transformers" >nul 2>&1
+"!PY_CMD!" -c "import transformers" >nul 2>&1
 if not errorlevel 1 set "NLLB_AVAILABLE=true"
 
 set "OLLAMA_AVAILABLE=false"
@@ -93,7 +110,7 @@ if not errorlevel 1 (
 )
 
 set "STABLE_TS_INSTALLED=false"
-python -c "import stable_whisper" >nul 2>&1
+"!PY_CMD!" -c "import stable_whisper" >nul 2>&1
 if not errorlevel 1 set "STABLE_TS_INSTALLED=true"
 
 :: ============================================================
@@ -164,7 +181,7 @@ echo.
 
 set "SIDX=0"
 set "_LMTMP=%TEMP%\wss_srt_%RANDOM%.tmp"
-python "%~dp0list_media.py" "%SCRIPT_DIR%" srt > "!_LMTMP!" 2>nul
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" srt > "!_LMTMP!" 2>nul
 set /p SIDX=<"!_LMTMP!"
 set /a SIDX=!SIDX! 2>nul
 set "_LMIDX=0"
@@ -198,11 +215,11 @@ if !STEST! LSS 1 goto INVALID_SRT
 if !STEST! GTR !SIDX! goto INVALID_SRT
 
 :: Single file - resolve path via Python
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do call :RUN_TRANSLATE "%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do call :RUN_TRANSLATE "%%P"
 goto TRANSLATE_DONE
 
 :INVALID_SRT
@@ -210,14 +227,14 @@ echo  [!] Invalid input
 goto CHOOSE_SRT
 
 :TRANSLATE_MULTI
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
 for %%c in (!SCHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
-        for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c srt 2^>nul') do (
+        for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c srt 2^>nul') do (
             echo  [*] Translating: %%P
             call :RUN_TRANSLATE "%%P"
         )
@@ -226,12 +243,12 @@ for %%c in (!SCHOICE!) do (
 goto TRANSLATE_DONE
 
 :TRANSLATE_ALL_FILES
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
 for /l %%i in (1,1,!SIDX!) do (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i srt 2^>nul') do (
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i srt 2^>nul') do (
         echo  [%%i/!SIDX!] Translating: %%P
         call :RUN_TRANSLATE "%%P"
     )
@@ -265,7 +282,7 @@ echo.
 
 set "CIDX=0"
 set "_LMTMP=%TEMP%\wss_cls_%RANDOM%.tmp"
-python "%~dp0list_media.py" "%SCRIPT_DIR%" srt-cleanup > "!_LMTMP!" 2>nul
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" srt-cleanup > "!_LMTMP!" 2>nul
 set /p CIDX=<"!_LMTMP!"
 set /a CIDX=!CIDX! 2>nul
 set "_LMIDX=0"
@@ -297,9 +314,9 @@ if !CTEST! LSS 1 goto CLEANUP_INVALID
 if !CTEST! GTR !CIDX! goto CLEANUP_INVALID
 
 echo.
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CCHOICE! srt-cleanup 2^>nul') do (
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CCHOICE! srt-cleanup 2^>nul') do (
     echo  Cleaning: %%P
-    python "%~dp0cleanup_srt.py" "%%P"
+    "!PY_CMD!" "%~dp0cleanup_srt.py" "%%P"
 )
 goto CLEANUP_DONE
 
@@ -310,9 +327,9 @@ goto CLEANUP_CHOOSE
 :CLEANUP_RUN_ALL
 echo.
 for /l %%i in (1,1,!CIDX!) do (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i srt-cleanup 2^>nul') do (
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i srt-cleanup 2^>nul') do (
         echo  [%%i/!CIDX!] %%P
-        python "%~dp0cleanup_srt.py" "%%P"
+        "!PY_CMD!" "%~dp0cleanup_srt.py" "%%P"
         echo.
     )
 )
@@ -353,7 +370,7 @@ echo.
 
 set "SIDX=0"
 set "_LMTMP=%TEMP%\wss_srt_%RANDOM%.tmp"
-python "%~dp0list_media.py" "%SCRIPT_DIR%" srt > "!_LMTMP!" 2>nul
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" srt > "!_LMTMP!" 2>nul
 set /p SIDX=<"!_LMTMP!"
 set /a SIDX=!SIDX! 2>nul
 set "_LMIDX=0"
@@ -387,11 +404,11 @@ if !STEST! LSS 1 goto OFFLINE_INVALID_SRT
 if !STEST! GTR !SIDX! goto OFFLINE_INVALID_SRT
 
 :: Single file - resolve path via Python
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do call :RUN_TRANSLATE_OFFLINE "%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do call :RUN_TRANSLATE_OFFLINE "%%P"
 goto OFFLINE_TRANSLATE_DONE
 
 :OFFLINE_INVALID_SRT
@@ -399,14 +416,14 @@ echo  [!] Invalid input
 goto OFFLINE_CHOOSE_SRT
 
 :OFFLINE_TRANSLATE_MULTI
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
 for %%c in (!SCHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
-        for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c srt 2^>nul') do (
+        for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c srt 2^>nul') do (
             echo  [*] Translating: %%P
             call :RUN_TRANSLATE_OFFLINE "%%P"
         )
@@ -415,12 +432,12 @@ for %%c in (!SCHOICE!) do (
 goto OFFLINE_TRANSLATE_DONE
 
 :OFFLINE_TRANSLATE_ALL
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
 for /l %%i in (1,1,!SIDX!) do (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i srt 2^>nul') do (
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i srt 2^>nul') do (
         echo  [%%i/!SIDX!] Translating: %%P
         call :RUN_TRANSLATE_OFFLINE "%%P"
     )
@@ -453,6 +470,7 @@ if "!NLLB_AVAILABLE!"=="false" (
 echo  [INFO] Gemini is skipped. Translation done offline via NLLB.
 echo.
 
+call :CHECK_SAFE_FILENAMES
 :: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
 echo  [SRT] = subtitle already exists
@@ -461,7 +479,7 @@ echo.
 
 set "IDX=0"
 set "_LMTMP=%TEMP%\wss_vid_%RANDOM%.tmp"
-python "%~dp0list_media.py" "%SCRIPT_DIR%" video > "!_LMTMP!" 2>nul
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" video > "!_LMTMP!" 2>nul
 set /p IDX=<"!_LMTMP!"
 set /a IDX=!IDX! 2>nul
 set "_LMIDX=0"
@@ -509,7 +527,7 @@ set "IS_MULTI=false"
 echo !CHOICE! | findstr "," >nul
 if not errorlevel 1 set "IS_MULTI=true"
 if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "VIDEO_FILE=%%P"
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "VIDEO_FILE=%%P"
     call :GET_VIDEO_DURATION
 )
 echo.
@@ -626,7 +644,7 @@ if /i "!CHOICE!"=="all" (
 ) else if "!IS_MULTI!"=="true" (
     echo   Files   : !CHOICE!
 ) else (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do echo   File    : %%P
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do echo   File    : %%P
 )
 echo   Engine  : Whisper
 echo   Model   : !MODEL!
@@ -650,7 +668,7 @@ set "SWAP_PRIMARY=swap"
 if /i "!CHOICE!"=="all" goto GTO_PROCESS_ALL
 if "!IS_MULTI!"=="true" goto GTO_PROCESS_MULTI
 
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "TARGET_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "TARGET_FILE=%%P"
 call :RUN_WHISPER "!TARGET_FILE!"
 goto DONE
 
@@ -658,7 +676,7 @@ goto DONE
 for %%c in (!CHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
-        for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c video 2^>nul') do (
+        for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c video 2^>nul') do (
             echo.
             echo  [*] Processing: %%P
             call :RUN_WHISPER "%%P"
@@ -669,7 +687,7 @@ goto DONE
 
 :GTO_PROCESS_ALL
 for /l %%i in (1,1,!IDX!) do (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i video 2^>nul') do (
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i video 2^>nul') do (
         echo.
         echo  [%%i/!IDX!] Processing: %%P
         call :RUN_WHISPER "%%P"
@@ -714,7 +732,7 @@ echo.
 
 set "SIDX=0"
 set "_LMTMP=%TEMP%\wss_srt_%RANDOM%.tmp"
-python "%~dp0list_media.py" "%SCRIPT_DIR%" srt > "!_LMTMP!" 2>nul
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" srt > "!_LMTMP!" 2>nul
 set /p SIDX=<"!_LMTMP!"
 set /a SIDX=!SIDX! 2>nul
 set "_LMIDX=0"
@@ -747,11 +765,11 @@ set /a STEST=!SCHOICE! 2>nul
 if !STEST! LSS 1 goto LLM_INVALID_SRT
 if !STEST! GTR !SIDX! goto LLM_INVALID_SRT
 
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do call :RUN_TRANSLATE_OFFLINE_LLM "%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !SCHOICE! srt 2^>nul') do call :RUN_TRANSLATE_OFFLINE_LLM "%%P"
 goto LLM_TRANSLATE_DONE
 
 :LLM_INVALID_SRT
@@ -759,14 +777,14 @@ echo  [!] Invalid input
 goto LLM_CHOOSE_SRT
 
 :LLM_TRANSLATE_MULTI
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
 for %%c in (!SCHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !SIDX! (
-        for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c srt 2^>nul') do (
+        for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c srt 2^>nul') do (
             echo  [*] Translating: %%P
             call :RUN_TRANSLATE_OFFLINE_LLM "%%P"
         )
@@ -775,12 +793,12 @@ for %%c in (!SCHOICE!) do (
 goto LLM_TRANSLATE_DONE
 
 :LLM_TRANSLATE_ALL
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get 1 srt 2^>nul') do set "DETECT_FILE=%%P"
 call :DETECT_SRT_LANG
 call :CHOOSE_TARGET_LANG
 echo.
 for /l %%i in (1,1,!SIDX!) do (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i srt 2^>nul') do (
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i srt 2^>nul') do (
         echo  [%%i/!SIDX!] Translating: %%P
         call :RUN_TRANSLATE_OFFLINE_LLM "%%P"
     )
@@ -825,6 +843,7 @@ if "!NLLB_AVAILABLE!"=="true" (
 echo  [INFO] Gemini is skipped. Translation done offline via LLM + NLLB.
 echo.
 
+call :CHECK_SAFE_FILENAMES
 echo  Scanning for video files in: %SCRIPT_DIR%
 echo  [SRT] = subtitle already exists
 echo ============================================================
@@ -832,7 +851,7 @@ echo.
 
 set "IDX=0"
 set "_LMTMP=%TEMP%\wss_vid_%RANDOM%.tmp"
-python "%~dp0list_media.py" "%SCRIPT_DIR%" video > "!_LMTMP!" 2>nul
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" video > "!_LMTMP!" 2>nul
 set /p IDX=<"!_LMTMP!"
 set /a IDX=!IDX! 2>nul
 set "_LMIDX=0"
@@ -879,7 +898,7 @@ set "IS_MULTI=false"
 echo !CHOICE! | findstr "," >nul
 if not errorlevel 1 set "IS_MULTI=true"
 if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "VIDEO_FILE=%%P"
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "VIDEO_FILE=%%P"
     call :GET_VIDEO_DURATION
 )
 echo.
@@ -987,7 +1006,7 @@ if /i "!CHOICE!"=="all" (
 ) else if "!IS_MULTI!"=="true" (
     echo   Files   : !CHOICE!
 ) else (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do echo   File    : %%P
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do echo   File    : %%P
 )
 echo   Engine  : Whisper
 echo   Model   : !MODEL!
@@ -1011,7 +1030,8 @@ set "SWAP_PRIMARY=swap"
 if /i "!CHOICE!"=="all" goto GTL_PROCESS_ALL
 if "!IS_MULTI!"=="true" goto GTL_PROCESS_MULTI
 
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "TARGET_FILE=%%P"
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video > "!_LMTMP!" 2>nul
+set /p TARGET_FILE=<"!_LMTMP!"
 call :RUN_WHISPER "!TARGET_FILE!"
 goto DONE
 
@@ -1019,10 +1039,12 @@ goto DONE
 for %%c in (!CHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
-        for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c video 2^>nul') do (
+        "!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c video > "!_LMTMP!" 2>nul
+        set /p TARGET_FILE=<"!_LMTMP!"
+        if defined TARGET_FILE (
             echo.
-            echo  [*] Processing: %%P
-            call :RUN_WHISPER "%%P"
+            echo  [*] Processing: !TARGET_FILE!
+            call :RUN_WHISPER "!TARGET_FILE!"
         )
     )
 )
@@ -1030,10 +1052,12 @@ goto DONE
 
 :GTL_PROCESS_ALL
 for /l %%i in (1,1,!IDX!) do (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i video 2^>nul') do (
+    "!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i video > "!_LMTMP!" 2>nul
+    set /p TARGET_FILE=<"!_LMTMP!"
+    if defined TARGET_FILE (
         echo.
-        echo  [%%i/!IDX!] Processing: %%P
-        call :RUN_WHISPER "%%P"
+        echo  [%%i/!IDX!] Processing: !TARGET_FILE!
+        call :RUN_WHISPER "!TARGET_FILE!"
     )
 )
 goto DONE
@@ -1056,6 +1080,7 @@ if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
     echo.
 )
 
+call :CHECK_SAFE_FILENAMES
 :: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
 echo  [SRT] = subtitle already exists
@@ -1064,7 +1089,7 @@ echo.
 
 set "IDX=0"
 set "_LMTMP=%TEMP%\wss_vid_%RANDOM%.tmp"
-python "%~dp0list_media.py" "%SCRIPT_DIR%" video > "!_LMTMP!" 2>nul
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" video > "!_LMTMP!" 2>nul
 set /p IDX=<"!_LMTMP!"
 set /a IDX=!IDX! 2>nul
 set "_LMIDX=0"
@@ -1112,7 +1137,7 @@ set "IS_MULTI=false"
 echo !CHOICE! | findstr "," >nul
 if not errorlevel 1 set "IS_MULTI=true"
 if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "VIDEO_FILE=%%P"
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "VIDEO_FILE=%%P"
     call :GET_VIDEO_DURATION
 )
 echo.
@@ -1229,7 +1254,7 @@ if /i "!CHOICE!"=="all" (
 ) else if "!IS_MULTI!"=="true" (
     echo   Files   : !CHOICE!
 ) else (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do echo   File    : %%P
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do echo   File    : %%P
 )
 echo   Engine  : Whisper
 echo   Model   : !MODEL!
@@ -1252,7 +1277,7 @@ set "SWAP_PRIMARY=swap"
 if /i "!CHOICE!"=="all" goto GT_PROCESS_ALL
 if "!IS_MULTI!"=="true" goto GT_PROCESS_MULTI
 
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "TARGET_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "TARGET_FILE=%%P"
 call :RUN_WHISPER "!TARGET_FILE!"
 goto DONE
 
@@ -1260,7 +1285,7 @@ goto DONE
 for %%c in (!CHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
-        for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c video 2^>nul') do (
+        for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c video 2^>nul') do (
             echo.
             echo  [*] Processing: %%P
             call :RUN_WHISPER "%%P"
@@ -1271,7 +1296,7 @@ goto DONE
 
 :GT_PROCESS_ALL
 for /l %%i in (1,1,!IDX!) do (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i video 2^>nul') do (
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i video 2^>nul') do (
         echo.
         echo  [%%i/!IDX!] Processing: %%P
         call :RUN_WHISPER "%%P"
@@ -1290,6 +1315,7 @@ echo   Folder: %SCRIPT_DIR%
 echo ============================================================
 echo.
 
+call :CHECK_SAFE_FILENAMES
 :: Scan video files
 echo  Scanning for video files in: %SCRIPT_DIR%
 echo  [SRT] = subtitle already exists
@@ -1298,7 +1324,7 @@ echo.
 
 set "IDX=0"
 set "_LMTMP=%TEMP%\wss_vid_%RANDOM%.tmp"
-python "%~dp0list_media.py" "%SCRIPT_DIR%" video > "!_LMTMP!" 2>nul
+"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" video > "!_LMTMP!" 2>nul
 set /p IDX=<"!_LMTMP!"
 set /a IDX=!IDX! 2>nul
 set "_LMIDX=0"
@@ -1346,7 +1372,7 @@ set "IS_MULTI=false"
 echo !CHOICE! | findstr "," >nul
 if not errorlevel 1 set "IS_MULTI=true"
 if /i not "!CHOICE!"=="all" if "!IS_MULTI!"=="false" (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "VIDEO_FILE=%%P"
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "VIDEO_FILE=%%P"
     call :GET_VIDEO_DURATION
 )
 echo.
@@ -1451,7 +1477,7 @@ if /i "!CHOICE!"=="all" (
 ) else if "!IS_MULTI!"=="true" (
     echo   Files   : !CHOICE!
 ) else (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do echo   File    : %%P
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do echo   File    : %%P
 )
 echo   Engine  : Whisper
 echo   Model   : !MODEL!
@@ -1470,7 +1496,7 @@ if /i not "!CONFIRM!"=="Y" goto CHOOSE_FILE
 if /i "!CHOICE!"=="all" goto PROCESS_ALL
 if "!IS_MULTI!"=="true" goto PROCESS_MULTI
 
-for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "TARGET_FILE=%%P"
+for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get !CHOICE! video 2^>nul') do set "TARGET_FILE=%%P"
 call :RUN_WHISPER "!TARGET_FILE!"
 goto DONE
 
@@ -1478,7 +1504,7 @@ goto DONE
 for %%c in (!CHOICE!) do (
     set /a CTEST=%%c 2>nul
     if !CTEST! GEQ 1 if !CTEST! LEQ !IDX! (
-        for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c video 2^>nul') do (
+        for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%c video 2^>nul') do (
             echo.
             echo  [*] Processing: %%P
             call :RUN_WHISPER "%%P"
@@ -1489,7 +1515,7 @@ goto DONE
 
 :PROCESS_ALL
 for /l %%i in (1,1,!IDX!) do (
-    for /f "delims=" %%P in ('python "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i video 2^>nul') do (
+    for /f "delims=" %%P in ('"!PY_CMD!" "%~dp0list_media.py" "%SCRIPT_DIR%" get %%i video 2^>nul') do (
         echo.
         echo  [%%i/!IDX!] Processing: %%P
         call :RUN_WHISPER "%%P"
@@ -1502,6 +1528,14 @@ goto DONE
 :: ============================================================
 :RUN_WHISPER
 set "INPUT_FILE=%~1"
+if "%~1"=="" (
+    echo  [ERROR] Empty input file path. File selection failed.
+    goto :eof
+)
+if not exist "%~1" (
+    echo  [ERROR] Input file not found: %~1
+    goto :eof
+)
 set "FILE_DIR=%~dp1"
 set "FILE_DIR=%FILE_DIR:~0,-1%"
 
@@ -1520,9 +1554,9 @@ setlocal EnableDelayedExpansion
 if "!STABLE_TS_INSTALLED!"=="true" (
     echo  [*] Starting Stable Whisper Processing...
     if "!LANGUAGE!"=="" (
-        python "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine whisper --model !MODEL! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+        "!PY_CMD!" "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine whisper --model !MODEL! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
     ) else (
-        python "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine whisper --model !MODEL! --language !LANGUAGE! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
+        "!PY_CMD!" "%~dp0stable_transcribe.py" "!RAW_FILE!" --engine whisper --model !MODEL! --language !LANGUAGE! --output_format !OUTPUT_FORMAT! --output_dir "!FILE_DIR!" --device !WHISPER_DEVICE!
     )
 ) else (
     if "!LANGUAGE!"=="" (
@@ -1585,7 +1619,7 @@ goto :eof
 :RUN_CLEANUP
 set "CLEAN_FILE=%~1"
 if not exist "!CLEAN_FILE!" goto :eof
-python "%~dp0cleanup_srt.py" "!CLEAN_FILE!"
+"!PY_CMD!" "%~dp0cleanup_srt.py" "!CLEAN_FILE!"
 if errorlevel 1 (
     echo  [WARN] Cleanup skipped (error in cleanup_srt.py)
     goto :eof
@@ -1604,7 +1638,7 @@ goto :eof
 :: ============================================================
 :DETECT_SRT_LANG
 set "SRT_LANG=unknown"
-for /f "tokens=*" %%L in ('python "%~dp0translate_srt.py" --detect-lang "!DETECT_FILE!" 2^>nul') do set "SRT_LANG=%%L"
+for /f "tokens=*" %%L in ('"!PY_CMD!" "%~dp0translate_srt.py" --detect-lang "!DETECT_FILE!" 2^>nul') do set "SRT_LANG=%%L"
 goto :eof
 
 :: ============================================================
@@ -1725,10 +1759,10 @@ if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
 
 if not "!GEMINI_CMD!"=="" (
     echo  [*] Translating with Gemini ^(+ NLLB for gaps^)...
-    python "%~dp0translate_srt.py" "!TRANS_FILE!" "!GEMINI_CMD!" "gemini" "!TARGET_LANG!" "!SWAP_PRIMARY!"
+    "!PY_CMD!" "%~dp0translate_srt.py" "!TRANS_FILE!" "!GEMINI_CMD!" "gemini" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 ) else (
     echo  [*] Gemini not found. Translating with NLLB ^(offline^)...
-    python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_PRIMARY!"
+    "!PY_CMD!" "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 )
 goto :eof
 
@@ -1746,7 +1780,7 @@ if "!NLLB_AVAILABLE!"=="false" (
 )
 
 echo  [*] Translating offline with NLLB...
-python "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_PRIMARY!"
+"!PY_CMD!" "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 goto :eof
 
 :: ============================================================
@@ -1767,7 +1801,7 @@ if "!OLLAMA_MODEL!"=="none" (
 )
 
 echo  [*] Translating offline with !OLLAMA_MODEL! ^(+ NLLB for gaps^)...
-python "%~dp0translate_srt.py" "!TRANS_FILE!" "!OLLAMA_MODEL!" "ollama" "!TARGET_LANG!" "!SWAP_PRIMARY!"
+"!PY_CMD!" "%~dp0translate_srt.py" "!TRANS_FILE!" "!OLLAMA_MODEL!" "ollama" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 goto :eof
 
 :: ============================================================
@@ -1825,7 +1859,7 @@ for /f "usebackq tokens=*" %%D in ("%TEMP%\ffprobe_dur.tmp") do set "FFPROBE_DUR
 del "%TEMP%\ffprobe_dur.tmp" 2>nul
 if not defined FFPROBE_DUR goto :eof
 if "!FFPROBE_DUR!"=="" goto :eof
-for /f "tokens=*" %%L in ('python "%~dp0check_gpu.py" duration "!FFPROBE_DUR!" 2^>nul') do set "%%L"
+for /f "tokens=*" %%L in ('"!PY_CMD!" "%~dp0check_gpu.py" duration "!FFPROBE_DUR!" 2^>nul') do set "%%L"
 goto :eof
 
 :: ============================================================
@@ -1859,12 +1893,11 @@ goto MAIN_LOOP
 :: ============================================================
 :CHECK_SAFE_FILENAMES
 set "SF_COUNT=0"
-for /f "tokens=*" %%C in ('python "%~dp0sanitize_filenames.py" "%SCRIPT_DIR%" check 2^>nul') do (
-    if "!SF_COUNT!"=="0" (
-        :: First token is the file count
-        set /a SF_COUNT=%%C
-    )
-)
+set "_SFTMP=%TEMP%\wss_safe_%RANDOM%.tmp"
+"!PY_CMD!" "%~dp0sanitize_filenames.py" "%SCRIPT_DIR%" count > "!_SFTMP!" 2>nul
+set /p SF_COUNT=<"!_SFTMP!"
+del "!_SFTMP!" 2>nul
+set /a SF_COUNT=!SF_COUNT! 2>nul
 if !SF_COUNT! LEQ 0 goto :eof
 
 cls
@@ -1873,16 +1906,16 @@ echo   [!] UNSAFE FILENAME DETECTED
 echo   Folder: %SCRIPT_DIR%
 echo ============================================================
 echo.
-echo   %SF_COUNT% file(s) contain special characters ^('!''^)
+echo   %SF_COUNT% file(s) contain special or non-ASCII characters
 echo   that can cause "file not found" errors during processing.
 echo.
 echo   Files found:
 echo   ------------
-python "%~dp0sanitize_filenames.py" "%SCRIPT_DIR%" check 2>nul | more +1
+"!PY_CMD!" "%~dp0sanitize_filenames.py" "%SCRIPT_DIR%" check 2>nul | more +1
 echo.
 echo ============================================================
 echo   Rename these files now to make them safe?
-echo   (The '!' will be removed from their names)
+echo   (Problem characters will be removed from their names)
 echo ============================================================
 echo.
 set "_SF_CHOICE=Y"
@@ -1898,10 +1931,20 @@ if /i "!_SF_CHOICE!"=="N" (
 echo.
 echo  Renaming files...
 echo  --------------------------------------------------------
-python "%~dp0sanitize_filenames.py" "%SCRIPT_DIR%" rename
+"!PY_CMD!" "%~dp0sanitize_filenames.py" "%SCRIPT_DIR%" rename
 echo  --------------------------------------------------------
 echo.
-echo  Done! Files have been renamed.
+set "SF_LEFT=0"
+set "_SFTMP=%TEMP%\wss_safe_%RANDOM%.tmp"
+"!PY_CMD!" "%~dp0sanitize_filenames.py" "%SCRIPT_DIR%" count > "!_SFTMP!" 2>nul
+set /p SF_LEFT=<"!_SFTMP!"
+del "!_SFTMP!" 2>nul
+set /a SF_LEFT=!SF_LEFT! 2>nul
+if !SF_LEFT! GTR 0 (
+    echo  [WARN] Rename did not finish. !SF_LEFT! unsafe file^(s^) remain.
+) else (
+    echo  Done! Files have been renamed.
+)
 echo.
 pause
 goto :eof

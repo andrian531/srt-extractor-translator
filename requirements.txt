@@ -1,0 +1,9 @@
+openai-whisper
+stable-ts
+torch
+torchaudio
+transformers
+sentencepiece
+sacremoses
+accelerate
+langdetect
