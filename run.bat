@@ -1538,6 +1538,12 @@ if not exist "%~1" (
 )
 set "FILE_DIR=%~dp1"
 set "FILE_DIR=%FILE_DIR:~0,-1%"
+set "VIDEO_FILE=%~1"
+call :GET_VIDEO_DURATION
+set "REPORT_VIDEO_DURATION=!VID_HHMM!"
+set "REPORT_GENERATE_SECONDS=0"
+set "REPORT_TRANSLATE_SECONDS=0"
+call :GET_NOW_SECONDS REPORT_GENERATE_START
 
 echo.
 echo  Processing : %~nx1
@@ -1576,6 +1582,9 @@ if errorlevel 1 (
         )
     )
 )
+call :GET_NOW_SECONDS REPORT_GENERATE_END
+set /a REPORT_GENERATE_SECONDS=REPORT_GENERATE_END-REPORT_GENERATE_START 2>nul
+if !REPORT_GENERATE_SECONDS! LSS 0 set /a REPORT_GENERATE_SECONDS+=86400
 
 echo  [DONE] Transcription complete: %~nx1
 set "SRT_NAME=%~n1"
@@ -1601,11 +1610,20 @@ if exist "!SRT_PATH!" (
         ) else (
             call :RUN_TRANSLATE "!SRT_PATH!"
         )
+        set "REPORT_TRANSLATE_SECONDS=!LAST_TRANSLATE_SECONDS!"
     )
 )
+set /a REPORT_TOTAL_SECONDS=REPORT_GENERATE_SECONDS+REPORT_TRANSLATE_SECONDS 2>nul
+call :FORMAT_SECONDS !REPORT_GENERATE_SECONDS! REPORT_GENERATE_TIME
+call :FORMAT_SECONDS !REPORT_TRANSLATE_SECONDS! REPORT_TRANSLATE_TIME
+call :FORMAT_SECONDS !REPORT_TOTAL_SECONDS! REPORT_TOTAL_TIME
 echo.
 echo ============================================================
 echo   FILE FINISHED: %~nx1
+echo   Video duration : !REPORT_VIDEO_DURATION!
+echo   Generate time  : !REPORT_GENERATE_TIME!
+if "!AUTO_TRANSLATE!"=="true" echo   Translate time : !REPORT_TRANSLATE_TIME!
+echo   Total time     : !REPORT_TOTAL_TIME!
 echo ============================================================
 endlocal
 endlocal
@@ -1749,6 +1767,7 @@ goto :eof
 :: ============================================================
 :RUN_TRANSLATE
 set "TRANS_FILE=%~1"
+set "LAST_TRANSLATE_SECONDS=0"
 
 if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
     echo  [INFO] No translation engine available.
@@ -1757,6 +1776,7 @@ if "!GEMINI_CMD!"=="" if "!NLLB_AVAILABLE!"=="false" (
     goto :eof
 )
 
+call :GET_NOW_SECONDS TRANS_START
 if not "!GEMINI_CMD!"=="" (
     echo  [*] Translating with Gemini ^(+ NLLB for gaps^)...
     "!PY_CMD!" "%~dp0translate_srt.py" "!TRANS_FILE!" "!GEMINI_CMD!" "gemini" "!TARGET_LANG!" "!SWAP_PRIMARY!"
@@ -1764,6 +1784,9 @@ if not "!GEMINI_CMD!"=="" (
     echo  [*] Gemini not found. Translating with NLLB ^(offline^)...
     "!PY_CMD!" "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_PRIMARY!"
 )
+call :GET_NOW_SECONDS TRANS_END
+set /a LAST_TRANSLATE_SECONDS=TRANS_END-TRANS_START 2>nul
+if !LAST_TRANSLATE_SECONDS! LSS 0 set /a LAST_TRANSLATE_SECONDS+=86400
 goto :eof
 
 :: ============================================================
@@ -1772,6 +1795,7 @@ goto :eof
 :: ============================================================
 :RUN_TRANSLATE_OFFLINE
 set "TRANS_FILE=%~1"
+set "LAST_TRANSLATE_SECONDS=0"
 
 if "!NLLB_AVAILABLE!"=="false" (
     echo  [INFO] NLLB not available. Skipping offline translation.
@@ -1779,8 +1803,12 @@ if "!NLLB_AVAILABLE!"=="false" (
     goto :eof
 )
 
+call :GET_NOW_SECONDS TRANS_START
 echo  [*] Translating offline with NLLB...
 "!PY_CMD!" "%~dp0translate_srt.py" "!TRANS_FILE!" "" "nllb" "!TARGET_LANG!" "!SWAP_PRIMARY!"
+call :GET_NOW_SECONDS TRANS_END
+set /a LAST_TRANSLATE_SECONDS=TRANS_END-TRANS_START 2>nul
+if !LAST_TRANSLATE_SECONDS! LSS 0 set /a LAST_TRANSLATE_SECONDS+=86400
 goto :eof
 
 :: ============================================================
@@ -1789,6 +1817,7 @@ goto :eof
 :: ============================================================
 :RUN_TRANSLATE_OFFLINE_LLM
 set "TRANS_FILE=%~1"
+set "LAST_TRANSLATE_SECONDS=0"
 
 if "!OLLAMA_AVAILABLE!"=="false" (
     echo  [INFO] Ollama not available. Skipping LLM translation.
@@ -1800,8 +1829,12 @@ if "!OLLAMA_MODEL!"=="none" (
     goto :eof
 )
 
+call :GET_NOW_SECONDS TRANS_START
 echo  [*] Translating offline with !OLLAMA_MODEL! ^(+ NLLB for gaps^)...
 "!PY_CMD!" "%~dp0translate_srt.py" "!TRANS_FILE!" "!OLLAMA_MODEL!" "ollama" "!TARGET_LANG!" "!SWAP_PRIMARY!"
+call :GET_NOW_SECONDS TRANS_END
+set /a LAST_TRANSLATE_SECONDS=TRANS_END-TRANS_START 2>nul
+if !LAST_TRANSLATE_SECONDS! LSS 0 set /a LAST_TRANSLATE_SECONDS+=86400
 goto :eof
 
 :: ============================================================
@@ -1860,6 +1893,24 @@ del "%TEMP%\ffprobe_dur.tmp" 2>nul
 if not defined FFPROBE_DUR goto :eof
 if "!FFPROBE_DUR!"=="" goto :eof
 for /f "tokens=*" %%L in ('"!PY_CMD!" "%~dp0check_gpu.py" duration "!FFPROBE_DUR!" 2^>nul') do set "%%L"
+goto :eof
+
+:GET_NOW_SECONDS
+for /f "tokens=*" %%T in ('powershell -NoProfile -Command "Get-Date -Format HH:mm:ss" 2^>nul') do set "_NOW_TIME=%%T"
+for /f "tokens=1-3 delims=:" %%A in ("!_NOW_TIME!") do set /a "%~1=(1%%A%%100)*3600+(1%%B%%100)*60+(1%%C%%100)" 2>nul
+goto :eof
+
+:FORMAT_SECONDS
+set "_SEC=%~1"
+if not defined _SEC set "_SEC=0"
+set /a _SEC+=0, _H=_SEC/3600, _M=(_SEC%%3600)/60, _S=_SEC%%60 2>nul
+if !_H! GTR 0 (
+    set "%~2=!_H!h !_M!m !_S!s"
+) else if !_M! GTR 0 (
+    set "%~2=!_M!m !_S!s"
+) else (
+    set "%~2=!_S!s"
+)
 goto :eof
 
 :: ============================================================
